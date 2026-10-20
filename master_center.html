@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Master Center</title>
+<style>
+:root{
+  --bg:#0b0e14;--panel:#131824;--panel2:#181f2e;--line:#232c3f;--txt:#e6e9f0;--mut:#8791a7;
+  --yel:#ffd23f;--ok:#3ddc97;--bad:#ff5d73;--blue:#5aa9ff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#10151f,var(--bg))}
+.logo{font-weight:800;letter-spacing:.14em;font-size:18px;color:var(--yel)}
+.logo small{color:var(--mut);font-weight:500;letter-spacing:.04em;margin-left:8px;font-size:12px}
+.sp{flex:1}
+.pill{padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.06em;border:1px solid var(--line);background:var(--panel)}
+.pill.on{color:var(--ok);border-color:#1f5e47;background:#10281f}
+.pill.pause{color:var(--yel);border-color:#6b5a1b;background:#2a2410}
+.pill.off{color:var(--bad);border-color:#6b2331;background:#2a1118}
+.up{color:var(--mut);font-size:12px;font-family:var(--mono)}
+main{padding:18px 22px;max-width:1500px;margin:0 auto}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.kpi .l{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+.kpi .v{font-size:30px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums}
+.kpi .s{color:var(--mut);font-size:12px}
+.grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:14px;align-items:start}
+@media(max-width:1000px){.grid{grid-template-columns:minmax(0,1fr)}}
+.col{display:grid;gap:14px}
+.grid>*,.col>*{min-width:0}
+h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--mut);font-weight:600;display:flex;align-items:center;gap:8px}
+h2 .sp{flex:1}
+h2 .n{text-transform:none;letter-spacing:0;font-weight:400}
+canvas{width:100%;height:150px;display:block}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 8px;border-bottom:1px solid #1a2132;white-space:nowrap}
+td.r,th.r{text-align:right}
+.mono{font-family:var(--mono)}
+.mut{color:var(--mut)}
+.empty{color:var(--mut);padding:18px 8px;text-align:center}
+.bar{display:inline-block;vertical-align:middle;width:70px;height:6px;border-radius:3px;background:#1d2538;margin-left:8px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ok)}
+/* sterowanie */
+.frm{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.frm label{display:flex;align-items:center;gap:6px;color:var(--txt)}
+input[type=text],input[type=password],select{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:6px 10px;font:inherit;min-width:0}
+input[type=text]:focus,input[type=password]:focus,select:focus{outline:none;border-color:var(--yel)}
+input:disabled{opacity:.45}
+#token{flex:1;min-width:200px;font-family:var(--mono)}
+#term-target{width:150px}
+#term-command{width:100%;background:transparent;border:0;color:var(--txt);font:inherit;font-family:var(--mono);padding:7px 4px}
+#term-command:focus{outline:none}
+.hint{color:var(--mut);font-size:12px;margin:-4px 0 10px;min-height:17px}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center}
+.btns .gap{width:10px}
+button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+button:hover{border-color:var(--yel)}
+button.ok{border-color:#1f5e47;color:var(--ok)}
+button.bad{border-color:#6b2331;color:var(--bad)}
+button.prim{background:var(--yel);color:#1b1500;border-color:var(--yel);font-weight:700}
+button:disabled{opacity:.5;cursor:default}
+.wynik{min-height:20px;font-size:13px;font-family:var(--mono)}
+.wynik.ok{color:var(--ok)}
+.wynik.err{color:var(--bad)}
+.terminal{overflow:hidden;border:1px solid var(--line);border-radius:8px;background:#070b09;margin-top:12px}
+.term-head{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #1c2a20;color:var(--mut);font-size:12px}
+.term-head strong{color:var(--ok);font-weight:600}
+.term-head .sp{flex:1}
+#terminal-output{height:230px;overflow:auto;padding:10px 12px;color:#c4d1c7;font:12.5px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.term-line{min-height:1.55em}
+.term-line.sent{color:var(--yel)}
+.term-line.result{color:#b5edc5}
+.term-line.pending{color:var(--mut)}
+.term-line.error{color:var(--bad)}
+.term-entry{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 8px;border-top:1px solid #1c2a20}
+.term-prompt{font:12px var(--mono);color:var(--ok);white-space:nowrap}
+.term-entry button{white-space:nowrap}
+/* feed */
+#feed{height:640px;overflow-y:auto;font-family:var(--mono);font-size:12.5px}
+.row{display:grid;grid-template-columns:62px 118px 1fr auto 56px;gap:8px;padding:4px 6px;border-bottom:1px solid #1a2132;align-items:baseline}
+.row .t{color:var(--mut)}
+.row .w{color:var(--blue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .z{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .c{color:var(--mut);text-align:right}
+.badge{font-size:11px;font-weight:700;padding:1px 7px;border-radius:5px}
+.badge.ok{color:var(--ok);background:#10281f}
+.badge.bad{color:var(--bad);background:#2a1118}
+.row.sys{grid-template-columns:62px 1fr;color:var(--yel);background:#1a1708}
+.new{animation:fl .9s ease-out}
+@keyframes fl{from{background:#2b3550}to{background:transparent}}
+/* okno historii */
+#overlay{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;padding:20px;z-index:10}
+#modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;max-width:760px;width:100%;max-height:88vh;overflow:auto;padding:18px 20px}
+#modal h3{margin:0 0 4px;font-size:18px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:12px 0}
+.stats div{background:var(--panel2);border-radius:8px;padding:8px 10px}
+.stats b{display:block;font-size:18px}
+.stats span{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+#conn{display:none;background:#2a1118;color:var(--bad);text-align:center;padding:6px;font-size:13px;border-bottom:1px solid #6b2331}
+</style>
+</head>
+<body>
+<div id="conn">Brak połączenia z Master - próbuję ponownie…</div>
+<header>
+  <div class="logo">MASTER CENTER<small>centrum dowodzenia Slaves</small></div>
+  <div class="sp"></div>
+  <div class="up" id="uptime">uptime –</div>
+  <div class="pill off" id="status">ŁĄCZENIE…</div>
+</header>
+
+<main>
+  <section class="kpis">
+    <div class="card kpi"><div class="l">Slaves aktywne</div><div class="v" id="k-akt">–</div><div class="s" id="k-akt-s">&nbsp;</div></div>
+    <div class="card kpi"><div class="l">Zadania rozwiązane</div><div class="v" id="k-zad">–</div><div class="s" id="k-zad-s">&nbsp;</div></div>
+    <div class="card kpi"><div class="l">Skuteczność</div><div class="v" id="k-skut">–</div><div class="s" id="k-skut-s">&nbsp;</div></div>
+    <div class="card kpi"><div class="l">Tempo</div><div class="v" id="k-tempo">–</div><div class="s">średnia z ostatnich 10 s</div></div>
+    <div class="card kpi"><div class="l">Śr. czas odpowiedzi</div><div class="v" id="k-czas">–</div><div class="s">od wydania zadania do odpowiedzi</div></div>
+  </section>
+
+  <div class="grid">
+    <div class="col">
+      <section class="card">
+        <h2>Zadania na sekundę <span class="n mut">(ostatnie 60 s)</span></h2>
+        <canvas id="wykres"></canvas>
+      </section>
+
+      <section class="card" id="sterowanie">
+        <h2>Sterowanie <span class="n mut">(token z konsoli Master / pliku master_panel_token.txt; zdalnie łącz się przez SSH)</span></h2>
+        <div class="frm">
+          <input id="token" type="password" placeholder="token panelu" autocomplete="off">
+        </div>
+
+        <div class="btns">
+          <button class="ok" id="b-start" title="Master zaczyna odpowiadać Slaves">▶ START Master</button>
+          <button class="bad" id="b-stop" title="Master przestaje odpowiadać; Slaves czekają i ponawiają">■ STOP Master</button>
+          <span class="gap"></span>
+          <button id="b-pauza" title="Wszystkie Slaves wstrzymują pobieranie zadań">⏸ Pauza wszystkim</button>
+          <button id="b-wznow" title="Wszystkie Slaves wracają do pracy">▶ Wznów wszystkim</button>
+          <button class="bad" id="b-koniec" title="Wszystkie Slaves kończą pracę (same się nie uruchomią)">⏹ Zakończ wszystkich</button>
+        </div>
+
+        <div class="card" id="start-slave" style="margin-bottom:12px;background:var(--panel2)">
+          <h2>Jednorazowy kod startowy <span class="n mut">(token działa jeden raz, wygasa po 10 min)</span></h2>
+          <div class="frm">
+            <input id="start-domena" type="text" placeholder="domena Master, np. master.example.com" autocomplete="off" style="flex:1;min-width:220px">
+            <input id="start-nazwa" type="text" placeholder="nazwa Slave (opcjonalnie)" autocomplete="off" style="width:200px">
+            <label><input id="start-https" type="checkbox" checked> HTTPS</label>
+            <button class="prim" id="b-start-slave">Wygeneruj polecenie</button>
+          </div>
+          <div class="hint" id="start-slave-hint">&nbsp;</div>
+          <textarea id="start-slave-cmd" readonly rows="2" style="display:none;width:100%;resize:vertical;background:#070b09;color:#b5edc5;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:12.5px"></textarea>
+          <div class="btns" id="start-slave-btns" style="display:none;margin-top:8px;margin-bottom:0">
+            <button id="b-start-slave-copy">Kopiuj polecenie</button>
+          </div>
+        </div>
+
+        <div class="terminal" aria-label="Bezpieczny terminal Slaves">
+          <div class="term-head">
+            <strong>SLAVE TERMINAL</strong>
+            <label for="term-target">Cel</label>
+            <input id="term-target" type="text" placeholder="ID, zakres (1-12) lub *" autocomplete="off">
+            <label for="term-macro">Makro</label>
+            <select id="term-macro" aria-label="Wybierz makro"><option value="">pliki .sh</option></select>
+            <button id="b-hist" title="Historia zadań wybranego Slaves z bazy">Historia</button>
+            <span class="sp"></span>
+            <span>Pojedyncze polecenia lub pliki macros · bez shella</span>
+          </div>
+          <div id="terminal-output" role="log" aria-live="polite">
+            <div class="term-line pending">Wpisz help, aby zobaczyć dozwolone komendy.</div>
+          </div>
+          <div class="term-entry">
+            <span class="term-prompt" id="term-prompt">master@slave:~$</span>
+            <input id="term-command" type="text" placeholder="pwd lub makro nazwa" autocomplete="off" spellcheck="false" aria-label="Komenda terminala">
+            <button class="prim" id="b-term-send" title="Wyślij komendę do wskazanego Slaves">Wyślij</button>
+          </div>
+        </div>
+        <div class="wynik" id="wynik"></div>
+      </section>
+
+      <section class="card">
+        <h2>Polecenia <span class="n mut">(ostatnie 10: do ilu Slaves dotarły i ile potwierdziło)</span></h2>
+        <div class="tw">
+          <table>
+            <thead><tr>
+              <th>#</th><th>Polecenie</th><th>Cel</th><th class="r">Adresaci</th>
+              <th>Potwierdzone</th><th class="r">Błędy</th><th class="r">Wiek</th><th>Przykładowy wynik</th>
+            </tr></thead>
+            <tbody id="polecenia"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="polecenia-pusto">Brak poleceń. Wyślij pierwsze kartą „Sterowanie”.</div>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2>Live feed <span class="sp"></span><button id="pauza">Wstrzymaj</button></h2>
+      <div id="feed"></div>
+    </section>
+  </div>
+</main>
+
+<div id="overlay"><div id="modal"></div></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+const fmtCzas = s => s == null ? '–' : (s < 1 ? Math.round(s * 1000) + ' ms' : s.toFixed(2) + ' s');
+const fmtDur = s => { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + 'h ' : '') + (h || m ? m + 'm ' : '') + x + 's'; };
+const hhmmss = ts => new Date(ts * 1000).toLocaleTimeString('pl-PL', {hour12: false});
+const dataGodz = ts => ts ? new Date(ts * 1000).toLocaleString('pl-PL', {hour12: false}) : '–';
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+let since = 0, paused = false, bufor = [], inflight = false, bledy = 0;
+const terminalPending = new Map();
+const terminalHistory = new Map([['all', ['Wpisz help, aby zobaczyć dozwolone komendy.']]]);
+let activeConsole = 'none', slavesInFlight = false, slavesCatalog = [];
+
+function zapiszTerminal(tekst, klasa, consoleKey = activeConsole) {
+  if (!terminalHistory.has(consoleKey)) terminalHistory.set(consoleKey, []);
+  const historia = terminalHistory.get(consoleKey);
+  historia.push({tekst, klasa});
+  if (historia.length > 200) historia.shift();
+  if (consoleKey === activeConsole) renderTerminal(consoleKey);
+}
+
+function renderTerminal(consoleKey = activeConsole) {
+  const output = $('#terminal-output');
+  output.textContent = '';
+  for (const linia of terminalHistory.get(consoleKey) || []) {
+    if (typeof linia === 'string') output.appendChild(el('div', 'term-line pending', linia));
+    else output.appendChild(el('div', 'term-line ' + linia.klasa, linia.tekst));
+  }
+  output.scrollTop = output.scrollHeight;
+}
+
+function konsolaDlaCelu(cel) {
+  const target = cel.trim(), normalized = target.toLowerCase();
+  if (!target) return 'none';
+  if (['*', 'all', 'wszyscy', 'wszystkie', 'wszystkim'].includes(normalized)) return 'all';
+  if (/^\d+$/.test(target)) return 'slave:' + target;
+  const matches = slavesCatalog.filter(slave => slave.id === target || slave.nazwa.toLowerCase() === normalized);
+  if (matches.length === 1) return 'slave:' + matches[0].id;
+  return 'target:' + target;
+}
+
+function wybierzKonsoleCelu() {
+  const cel = $('#term-target').value.trim();
+  activeConsole = konsolaDlaCelu(cel);
+  $('#term-prompt').textContent = activeConsole === 'all'
+    ? 'master@wszyscy:~$' : 'master@' + (cel || 'cel') + ':~$';
+  if (!terminalHistory.has(activeConsole)) terminalHistory.set(activeConsole, []);
+  renderTerminal();
+}
+
+async function zaladujSlaves() {
+  if (slavesInFlight || !tokenEl.value) return;
+  slavesInFlight = true;
+  try {
+    const r = await fetch('/api/slaves', {cache: 'no-store', headers: {'X-Token': tokenEl.value}});
+    if (r.ok) {
+      slavesCatalog = (await r.json()).slaves || [];
+      wybierzKonsoleCelu();
+    }
+  } catch (e) {} finally {
+    slavesInFlight = false;
+  }
+}
+setInterval(zaladujSlaves, 5000);
+
+// ------------------------------------------------------------------ polling
+async function tick() {
+  if (inflight) return;
+  inflight = true;
+  try {
+    const r = await fetch('/api/stan?since=' + since, {
+      cache: 'no-store', headers: {'X-Token': tokenEl.value}
+    });
+    if (r.status === 403) {
+      $('#conn').textContent = 'Wpisz token panelu, aby odczytać stan i sterować Slaves.';
+      $('#conn').style.display = 'block';
+      $('#status').className = 'pill pause';
+      $('#status').textContent = 'WYMAGANY TOKEN';
+      return;
+    }
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    bledy = 0; polaczenie(true);
+    if (d.seq < since) { since = 0; $('#feed').textContent = ''; bufor = []; return; } // Master zrestartowany
+    renderKpi(d); rysujWykres(d.seria); renderPolecenia(d.polecenia); dodajFeed(d.feed);
+    since = d.seq;
+  } catch (e) {
+    if (++bledy >= 2) polaczenie(false);   // pojedyncza nieudana próba nie miga banerem
+  } finally {
+    inflight = false;
+  }
+}
+
+function polaczenie(ok) {
+  $('#conn').style.display = ok ? 'none' : 'block';
+  if (!ok) { const s = $('#status'); s.className = 'pill off'; s.textContent = 'BRAK POŁĄCZENIA'; }
+}
+
+// ---------------------------------------------------------------------- KPI
+function renderKpi(d) {
+  const s = $('#status');
+  s.className = 'pill ' + (d.pracuje ? 'on' : 'pause');
+  s.textContent = d.pracuje ? 'PRACUJE' : 'WSTRZYMANY';
+  $('#uptime').textContent = 'uptime ' + fmtDur(d.uptime);
+  $('#k-akt').textContent = d.aktywne.toLocaleString('pl-PL');
+  $('#k-akt-s').textContent = 'z ' + d.slaves.toLocaleString('pl-PL') + ' zarejestrowanych · połączeń: ' + d.polaczenia.toLocaleString('pl-PL');
+  $('#k-zad').textContent = d.zadan_razem.toLocaleString('pl-PL');
+  $('#k-zad-s').textContent = 'w tej sesji: ' + d.sesja.toLocaleString('pl-PL');
+  $('#k-skut').textContent = d.zadan_razem ? (100 * d.dobre / d.zadan_razem).toFixed(1) + '%' : '–';
+  $('#k-skut-s').textContent = 'błędne: ' + d.zle.toLocaleString('pl-PL');
+  $('#k-tempo').textContent = d.tempo.toFixed(1) + ' /s';
+  $('#k-czas').textContent = fmtCzas(d.sr_czas);
+}
+
+// ------------------------------------------------------------------- wykres
+function rysujWykres(seria) {
+  const c = $('#wykres'), dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const x = c.getContext('2d');
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.clearRect(0, 0, w, h);
+  const max = Math.max(5, ...seria), padL = 30, padB = 16, ph = h - padB - 4;
+  const bw = (w - padL) / seria.length;
+  x.font = '10px ' + css('--mono'); x.fillStyle = css('--mut'); x.strokeStyle = css('--line'); x.lineWidth = 1;
+  for (const f of [0, .5, 1]) {
+    const y = 4 + ph - f * ph;
+    x.beginPath(); x.moveTo(padL, y); x.lineTo(w, y); x.stroke();
+    x.fillText(String(Math.round(max * f)), 2, y + 3);
+  }
+  x.fillStyle = css('--yel');
+  seria.forEach((v, i) => {
+    const bh = v / max * ph;
+    x.globalAlpha = .35 + .65 * (i / seria.length);
+    x.fillRect(padL + i * bw + 1, 4 + ph - bh, Math.max(1, bw - 2), bh);
+  });
+  x.globalAlpha = 1; x.fillStyle = css('--mut');
+  x.fillText('-60 s', padL, h - 3); x.fillText('teraz', w - 30, h - 3);
+}
+
+// ------------------------------------------------------------ tabela poleceń
+function renderPolecenia(lista) {
+  const tb = $('#polecenia');
+  tb.textContent = '';
+  $('#polecenia-pusto').style.display = lista.length ? 'none' : 'block';
+  for (const p of lista) {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'mut', '#' + p.id));
+    tr.appendChild(el('td', 'mono', p.polecenie));
+    tr.appendChild(el('td', null, p.cel === 'wszystkie' ? 'wszystkie' : '#' + p.cel));
+    tr.appendChild(el('td', 'r', p.adresaci.toLocaleString('pl-PL')));
+    const td = el('td'); td.appendChild(document.createTextNode(p.wykonane.toLocaleString('pl-PL')));
+    const bar = el('span', 'bar'), fill = el('i'); fill.style.width = (p.adresaci ? Math.min(100, 100 * p.wykonane / p.adresaci) : 0) + '%';
+    bar.appendChild(fill); td.appendChild(bar); tr.appendChild(td);
+    tr.appendChild(el('td', 'r', String(p.bledy)));
+    tr.appendChild(el('td', 'r mut', Math.floor(p.wiek) + ' s'));
+    tr.appendChild(el('td', 'mono mut', p.przyklad || '–'));
+    tb.appendChild(tr);
+  }
+}
+
+// --------------------------------------------------------------------- feed
+function dodajFeed(zdarzenia) {
+  renderTerminalResults(zdarzenia);
+  if (paused) { bufor.push(...zdarzenia); odswiezPrzycisk(); return; }
+  renderFeed(zdarzenia);
+}
+
+function renderTerminalResults(zdarzenia) {
+  for (const e of zdarzenia) {
+    if (e.command_id == null || !terminalPending.has(e.command_id)) continue;
+    const pending = terminalPending.get(e.command_id);
+    zapiszTerminal(`< #${e.slave_id} ${e.slave_nazwa}: ${e.wynik}${e.ok ? '' : ' [BŁĄD]'}`,
+      e.ok ? 'result' : 'error', pending.consoleKey);
+    pending.remaining--;
+    if (pending.remaining > 0) terminalPending.set(e.command_id, pending);
+    else terminalPending.delete(e.command_id);
+  }
+}
+function renderFeed(zdarzenia) {
+  const f = $('#feed');
+  for (const e of zdarzenia) {
+    let r;
+    if (e.typ === 'sys') {
+      r = el('div', 'row sys new'); r.appendChild(el('span', 't', hhmmss(e.ts))); r.appendChild(el('span', null, e.tekst));
+    } else {
+      r = el('div', 'row new');
+      r.appendChild(el('span', 't', hhmmss(e.ts)));
+      r.appendChild(el('span', 'w', '#' + e.id + ' ' + e.nazwa));
+      r.appendChild(el('span', 'z', e.tekst + ' = ' + e.odp));
+      r.appendChild(el('span', 'badge ' + (e.ok ? 'ok' : 'bad'), e.ok ? 'OK' : 'ZŁE (' + e.poprawna + ')'));
+      r.appendChild(el('span', 'c', fmtCzas(e.czas)));
+    }
+    f.insertBefore(r, f.firstChild);
+  }
+  while (f.children.length > 150) f.lastChild.remove();
+}
+function odswiezPrzycisk() { $('#pauza').textContent = paused ? 'Wznów' + (bufor.length ? ' (+' + bufor.length + ')' : '') : 'Wstrzymaj'; }
+$('#pauza').onclick = () => {
+  paused = !paused;
+  if (!paused) { renderFeed(bufor); bufor = []; }
+  odswiezPrzycisk();
+};
+
+// ---------------------------------------------------------------- sterowanie
+const tokenEl = $('#token');
+tokenEl.value = sessionStorage.getItem('masterToken') || '';
+tokenEl.oninput = () => { sessionStorage.setItem('masterToken', tokenEl.value); zaladujSlaves(); };
+zaladujSlaves();
+
+let macrosInFlight = false;
+async function zaladujMakra() {
+  if (macrosInFlight) return;
+  macrosInFlight = true;
+  try {
+    const r = await fetch('/api/meta', {cache: 'no-store'});
+    if (!r.ok) return;
+    const d = await r.json(), select = $('#term-macro');
+    const macros = d.macros || [];
+    if ([...select.options].slice(1).map(o => o.value).join('\n') === macros.join('\n')) return;
+    const wybrane = select.value;
+    select.textContent = '';
+    select.appendChild(el('option', null, 'pliki .sh'));
+    for (const nazwa of macros) {
+      const option = el('option', null, nazwa);
+      option.value = nazwa;
+      select.appendChild(option);
+    }
+    if (macros.includes(wybrane)) select.value = wybrane;
+  } catch (e) {} finally {
+    macrosInFlight = false;
+  }
+}
+zaladujMakra();
+setInterval(zaladujMakra, 5000);
+$('#term-macro').onchange = e => {
+  if (!e.target.value) return;
+  $('#term-command').value = 'makro ' + e.target.value;
+  $('#term-command').focus();
+};
+
+function komunikat(tekst, ok) {
+  const w = $('#wynik'); w.textContent = tekst; w.className = 'wynik ' + (ok ? 'ok' : 'err');
+}
+
+async function api(sciezka, dane) {
+  const r = await fetch(sciezka, {
+    method: 'POST', cache: 'no-store',
+    headers: {'Content-Type': 'application/json', 'X-Token': tokenEl.value},
+    body: JSON.stringify(dane),
+  });
+  let d = {};
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) {
+    if (r.status === 403) { tokenEl.focus(); throw new Error('zły lub brak tokenu (wpisz go w polu „token panelu”)'); }
+    throw new Error(d.blad || 'błąd ' + r.status);
+  }
+  return d;
+}
+
+async function akcjaMaster(akcja) {
+  try {
+    await api('/api/master', {akcja});
+    komunikat(akcja === 'start' ? 'Master: START - słucha Slaves' : 'Master: STOP - ignoruje Slaves', true);
+    tick();
+  } catch (e) { komunikat(e.message, false); }
+}
+
+async function wyslij(cel, polecenie, args) {
+  try {
+    const d = await api('/api/polecenie', {cel, polecenie, args});
+    komunikat('Polecenie #' + d.id + " '" + [polecenie, ...args].join(' ') + "' wysłane " +
+              (d.cel === 'wszystkie' ? 'do wszystkich (' + d.adresaci.toLocaleString('pl-PL') + ')' : 'do #' + d.cel), true);
+    tick();
+  } catch (e) { komunikat(e.message, false); }
+}
+
+function zakonczWszystkich() {
+  if (confirm('Zakończyć pracę WSZYSTKICH Slaves? Same się nie uruchomią ponownie.')) wyslij('wszystkie', 'stop', []);
+}
+
+let startSlaveWygasaTs = 0, startSlaveTimer = null;
+function startSlaveOdliczanie() {
+  clearInterval(startSlaveTimer);
+  startSlaveTimer = setInterval(() => {
+    const pozostalo = Math.round(startSlaveWygasaTs - Date.now() / 1000);
+    const hint = $('#start-slave-hint');
+    if (pozostalo <= 0) {
+      hint.textContent = 'Kod wygasł - wygeneruj nowy.';
+      $('#start-slave-cmd').style.display = 'none';
+      $('#start-slave-btns').style.display = 'none';
+      clearInterval(startSlaveTimer);
+    } else {
+      hint.textContent = 'Ważny jeszcze ' + pozostalo + ' s albo do pierwszego użycia - potem trzeba wygenerować nowy.';
+    }
+  }, 1000);
+}
+$('#b-start-slave').onclick = async () => {
+  const domena = $('#start-domena').value.trim();
+  if (!domena) { $('#start-slave-hint').textContent = 'Podaj domenę/adres Master.'; return; }
+  try {
+    const d = await api('/api/token-jednorazowy', {
+      domena, nazwa: $('#start-nazwa').value.trim(), https: $('#start-https').checked,
+    });
+    $('#start-slave-cmd').value = d.polecenie;
+    $('#start-slave-cmd').style.display = 'block';
+    $('#start-slave-btns').style.display = 'flex';
+    startSlaveWygasaTs = d.wygasa_ts;
+    startSlaveOdliczanie();
+    komunikat('Jednorazowy kod wygenerowany - przekaż polecenie zaufanej osobie/urządzeniu.', true);
+  } catch (e) { $('#start-slave-hint').textContent = e.message; }
+};
+$('#b-start-slave-copy').onclick = () => {
+  const pole = $('#start-slave-cmd');
+  pole.select();
+  navigator.clipboard?.writeText(pole.value).catch(() => document.execCommand('copy'));
+  komunikat('Polecenie skopiowane do schowka.', true);
+};
+
+$('#b-start').onclick = () => akcjaMaster('start');
+$('#b-stop').onclick = () => akcjaMaster('stop');
+$('#b-pauza').onclick = () => wyslij('wszystkie', 'pauza', []);
+$('#b-wznow').onclick = () => wyslij('wszystkie', 'wznow', []);
+$('#b-koniec').onclick = zakonczWszystkich;
+$('#b-hist').onclick = () => {
+  const id = $('#term-target').value.trim();
+  if (!id) return komunikat('Wpisz ID lub nazwę Slaves.', false);
+  if (id === '*' || id.includes('-')) return komunikat('Historia wymaga jednego ID lub nazwy Slaves.', false);
+  szczegoly(id);
+};
+
+$('#term-target').oninput = wybierzKonsoleCelu;
+$('#b-term-send').onclick = async () => {
+  const target = $('#term-target').value.trim();
+  const input = $('#term-command'), command = input.value.trim();
+  if (!command) return;
+  if (command.toLowerCase() === 'clear') {
+    terminalHistory.set(activeConsole, []);
+    renderTerminal();
+    input.value = '';
+    return;
+  }
+  if (command.toLowerCase() === 'help') {
+    zapiszTerminal('Makro: makro <nazwa> uruchamia plik macros/<nazwa>.sh; każda linia to osobne polecenie bez shella. Pojedyncze polecenie: program i flagi, np. ls -la. clear czyści ekran.', 'pending');
+    input.value = '';
+    return;
+  }
+  if (!target) return zapiszTerminal('Wpisz ID, nazwę, zakres lub * jako cel.', 'error');
+  input.value = '';
+  const consoleKey = konsolaDlaCelu(target);
+  try {
+    const d = await api('/api/terminal', {cel: target, komenda: command});
+    const resultConsoleKey = d.polecenia.length === 1 && d.polecenia[0].cel !== 'wszystkie'
+      ? 'slave:' + d.polecenia[0].cel : consoleKey;
+    zapiszTerminal(`master@${target}:~$ ${command}`, 'sent', resultConsoleKey);
+    for (const p of d.polecenia) {
+      if (p.adresaci > 0) terminalPending.set(p.id, {remaining: p.adresaci, consoleKey: resultConsoleKey});
+    }
+    const odbiorcy = d.cel === '*' || d.cel.toLowerCase() === 'wszystkie'
+      ? `wszystkich (${d.adresaci})`
+      : d.cele.map(id => id === 'wszystkie' ? 'wszystkich' : '#' + id).join(', ');
+    zapiszTerminal(`[polecenie wysłane do ${odbiorcy}; oczekiwanie na odpowiedź]`, 'pending', resultConsoleKey);
+  } catch (e) {
+    zapiszTerminal(e.message, 'error', consoleKey);
+  }
+};
+$('#term-command').onkeydown = e => { if (e.key === 'Enter') $('#b-term-send').click(); };
+
+// ---------------------------------------------------------- okno szczegółów
+async function szczegoly(id) {
+  const m = $('#modal'); m.textContent = 'Ładuję…'; $('#overlay').style.display = 'flex';
+  try {
+    const r = await fetch('/api/slave/' + encodeURIComponent(id), {
+      cache: 'no-store', headers: {'X-Token': tokenEl.value}
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.blad || r.status);
+    m.textContent = '';
+    const top = el('div'); top.style.display = 'flex'; top.style.alignItems = 'center';
+    top.appendChild(el('h3', null, '#' + d.id + ' ' + d.nazwa));
+    const sp = el('span'); sp.style.flex = '1'; top.appendChild(sp);
+    const x = el('button', null, 'Zamknij'); x.onclick = zamknij; top.appendChild(x); m.appendChild(top);
+    m.appendChild(el('div', 'mut', 'zarejestrowany: ' + dataGodz(d.zarejestrowany) + ' · pierwsze zadanie: ' + dataGodz(d.pierwsze) + ' · ostatnie: ' + dataGodz(d.ostatnie)));
+    const st = el('div', 'stats');
+    for (const [l, v] of [['Zadania', d.razem.toLocaleString('pl-PL')], ['Skuteczność', d.razem ? (100 * d.dobre / d.razem).toFixed(1) + '%' : '–'],
+        ['Śr. czas', fmtCzas(d.sr_czas)], ['Min', fmtCzas(d.min_czas)], ['Max', fmtCzas(d.max_czas)]]) {
+      const b = el('div'); b.appendChild(el('b', null, v)); b.appendChild(el('span', null, l)); st.appendChild(b);
+    }
+    m.appendChild(st);
+    m.appendChild(el('h2', null, 'Ostatnie 50 zadań (z bazy)'));
+    const tw = el('div', 'tw'), t = el('table'), thead = el('thead'), hr = el('tr');
+    for (const c of ['Czas', 'Działanie', 'Odpowiedź', 'Wynik', 'Czas odp.']) hr.appendChild(el('th', null, c));
+    thead.appendChild(hr); t.appendChild(thead);
+    const tb = el('tbody');
+    for (const z of d.zadania) {
+      const tr = el('tr');
+      tr.appendChild(el('td', 'mut', hhmmss(z.ts)));
+      tr.appendChild(el('td', 'mono', z.dzialanie));
+      tr.appendChild(el('td', 'mono', z.odpowiedz));
+      const td = el('td'); td.appendChild(el('span', 'badge ' + (z.ok ? 'ok' : 'bad'), z.ok ? 'OK' : 'ZŁE (' + z.poprawna + ')')); tr.appendChild(td);
+      tr.appendChild(el('td', 'mut', fmtCzas(z.czas)));
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb); tw.appendChild(t); m.appendChild(tw);
+    if (!d.zadania.length) m.appendChild(el('div', 'empty', 'Ten Slave nie rozwiązał jeszcze żadnego zadania.'));
+  } catch (e) { m.textContent = 'Nie udało się pobrać danych: ' + e.message; }
+}
+function zamknij() { $('#overlay').style.display = 'none'; }
+$('#overlay').onclick = e => { if (e.target.id === 'overlay') zamknij(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape') zamknij(); });
+
+setInterval(tick, 1000);
+tick();
+</script>
+</body>
+</html>
