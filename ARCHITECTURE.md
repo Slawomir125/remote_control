@@ -1,73 +1,120 @@
 # Architektura projektu
 
-## Zastrzeżenie dotyczące obecnej implementacji
+## Przegląd
 
-Poniższy opis przedstawia komponenty i przepływ danych na poziomie ogólnym.
-Obecny projekt nie jest tylko wizualną symulacją: klient może wykonywać
-rzeczywiste polecenia i uruchamiać procesy na swoim hoście. Używaj go wyłącznie
-w kontrolowanym środowisku, na własnych maszynach. Sieć lokalna nie gwarantuje,
-że wszystkie znajdujące się w niej urządzenia są Twoje ani że można na nich
-bezpiecznie testować.
+System składa się z trzech warstw: **koordynator** (Master), **klienci roboczi**
+(Slaves) i **panel webowy** (Master Center). Komunikacja Master↔Slave odbywa się
+po HTTP/HTTPS z tokenami bearer. Panel łączy się z Masterem przez lokalne API HTTP
+chronione tokenem. Dodatkowo Master może zarządzać sesjami SSH do dowolnych hostów.
 
-## Komponenty
+## Koordynator — pakiet `master/`
 
-### Koordynator
+Monolityczny `master.py` został rozbity na 11 modułów w pakiecie `master/`.
+Punkty rozbudowy to **rejestry wypełniane dekoratorami**:
 
-`master.py` utrzymuje stan klientów i zadań, przyjmuje ich zgłoszenia,
-przetwarza odpowiedzi oraz zapisuje wybrane dane w SQLite. Udostępnia osobną
-warstwę komunikacji dla klientów i warstwę panelu administracyjnego. Konsola
-pozwala obserwować stan oraz zarządzać zadaniami.
+| Dekorator | Rejestr | Zastosowanie |
+|-----------|---------|-------------|
+| `@endpoint(ścieżka)` | `ENDPOINTY` | nowy adres HTTP w panelu |
+| `@komenda(nazwa, opis)` | `KOMENDY` | nowa komenda konsoli |
+| `@typ_pakietu(nazwa)` | `TYPY_PAKIETOW` | nowy typ wiadomości od Slaves |
 
-### Klient roboczy
+### Moduły
 
-`slave.py` przechowuje lokalny stan sesji, okresowo komunikuje się
-z koordynatorem, odbiera pracę lub polecenia i odsyła wyniki. Obsługa poleceń
-obejmuje akcje systemowe, dlatego klient należy traktować jako program
-wykonujący zdalnie zlecone działania, a nie jako nieszkodliwy generator
-telemetrii. `slave/slave.py` jest obecnie identyczną kopią tego pliku.
+| Moduł | Odpowiedzialność |
+|-------|-----------------|
+| `main.py` | Punkt startowy — montuje serwery, uruchamia konsolę |
+| `config.py` | Stałe, ścieżki, limity, rejestry dekoratorów |
+| `stan.py` | Dataclassy: `Stan`, `Slave`, `Polecenie` |
+| `baza.py` | SQLite (WAL), migracje, persystencja, odtwarzanie stanu |
+| `logika.py` | Rejestracja slave'ów, polecenia, tokeny jednorazowe, kody startowe, makra |
+| `panel.py` | Serwer HTTP panelu, endpointy API, routing, `/join/` bootstrap |
+| `serwer_slaves.py` | asyncio TCP serwer — komunikacja ze slave'ami |
+| `ssh.py` | SSH ControlMaster — sesje, endpointy `/api/ssh/*` |
+| `konsola.py` | Interaktywna konsola (komendy `start`, `stop`, `polecenie`, `makro`, …) |
+| `widoki.py` | Serializacja stanu do JSON (snapshoty dla panelu) |
+| `zadania.py` | Ocena odpowiedzi, okno czasowe, tempo, statystyki |
 
-### Panel
+### Przepływ danych
 
-`master_center.html` prezentuje stan i historię zdarzeń oraz udostępnia
-interfejs sterujący. Panel korzysta z API koordynatora. Dostęp do panelu
-powinien być ograniczony do zaufanego środowiska; nie należy wystawiać go
-publicznie.
+```
+Slave ──HTTP/HTTPS──► serwer_slaves.py ──► logika.py ──► baza.py (SQLite)
+                                               │
+                                               ▼
+Panel ◄──HTTP──── panel.py ◄──── widoki.py ◄── stan.py (pamięć)
+                     │
+                     ▼
+               ssh.py ──SSH ControlMaster──► zdalne hosty
+```
 
-### Uruchamianie i dane
+1. Slave łączy się z `serwer_slaves.py`, przedstawia token.
+2. `logika.py` przetwarza pakiet (rejestracja / wynik / potwierdzenie polecenia).
+3. `baza.py` zapisuje do SQLite; `stan.py` trzyma stan w pamięci.
+4. Panel odpytuje `widoki.py` co sekundę (`/api/stan`).
+5. SSH działa niezależnie — `ssh.py` zarządza sesjami ControlMaster.
 
-`run_slaves.py` służy do uruchamiania wielu instancji klientów w testach.
-`Dockerfile` i `compose.yaml` opisują kontener dla koordynatora. Dane trwałe,
-pliki stanu, bazy SQLite i poświadczenia są przechowywane lokalnie i nie
-powinny trafiać do repozytorium ani do publicznych obrazów.
+## Klient roboczy — `slave.py`
 
-## Ogólny przepływ danych
+Slave to samodzielny skrypt (~535 linii) z dwoma trybami uruchomienia:
 
-1. Klient nawiązuje komunikację z koordynatorem i przedstawia swoją sesję.
-2. Koordynator aktualizuje stan klienta i, jeśli ma do wykonania pracę,
-   przekazuje ją klientowi.
-3. Klient przetwarza otrzymane dane, a następnie odsyła wynik i aktualizację
-   swojego stanu.
-4. Koordynator zapisuje wybrane informacje i udostępnia je konsoli oraz
-   panelowi.
-5. Panel odświeża widok na podstawie danych udostępnianych przez koordynator.
+- **CLI**: `python3 slave.py --master X --token-rejestracji Y`
+- **Curl bootstrap**: `curl -s http://master:8080/join/<kod> | python3`
 
-To opis logiczny, a nie specyfikacja protokołu. Nie należy traktować go jako
-instrukcji wdrażania usługi ani podłączania klientów do urządzeń.
+Argumenty mają fallback na zmienne środowiskowe (`SLAVE_MASTER`, `SLAVE_TOKEN`,
+`SLAVE_NAME`, `SLAVE_HTTPS`), co umożliwia bootstrap przez preambułę env vars.
 
-## Granice zaufania i ryzyka
+Po rejestracji stan zapisywany w `slave_state/<nazwa>.json` — ponowne uruchomienie
+nie wymaga tokenu.
 
-- Klient wykonujący polecenia ma wpływ na system, na którym działa.
-- Poświadczenia i lokalny stan klienta są wrażliwymi danymi.
-- Kanał sieciowy i panel wymagają ochrony; samo użycie prywatnego adresu IP
-  nie zapewnia uwierzytelnienia ani autoryzacji urządzeń.
-- Pliki SQLite, klucze, tokeny i kopie stanu nie powinny być commitowane.
-- `slave.py` i `slave/slave.py` są zduplikowane; zmianę funkcjonalną łatwo
-  zastosować tylko w jednej kopii.
+### Obsługa poleceń
 
-## Bezpieczny wariant edukacyjny
+Polecenia od Mastera obsługiwane przez dekorator `@polecenie`:
+`exec` (uruchom program), `makro` (sekwencja z .sh), `pauza`, `wznow`, `status`, `stop`.
 
-Docelowy symulator powinien zastąpić klientów syntetycznymi obiektami w pamięci,
-a polecenia — zamkniętym katalogiem fikcyjnych zdarzeń. Powinien pokazywać
-kolejkę, heartbeat, statusy i wyniki scenariuszy, ale nie uruchamiać procesów,
-nie wykonywać makr, nie zapisywać poświadczeń klientów i nie komunikować się
-z rzeczywistymi hostami. Obecna implementacja tych ograniczeń nie zapewnia.
+## Panel — `master_center.html`
+
+Jednostronicowa aplikacja z dwoma zakładkami:
+
+### Zakładka Slaves
+- KPI: slave'y, aktywne, zadania/s, czas pracy
+- Tabela slave'ów z kontrolkami (pauza/wznów/stop)
+- Terminal poleceń z selektorem makr
+- Jednorazowy kod startowy z curl bootstrap i tradycyjnym poleceniem
+
+### Zakładka SSH
+- KPI: hosty, aktywne sesje, polecenia
+- Tabela hostów z sesjami (połączony/rozłączony/łączenie/błąd)
+- Dodawanie/usuwanie hostów, masowe łączenie/rozłączanie
+- Terminal SSH z selectorem hosta
+- Feed poleceń z pauzą
+
+## SSH ControlMaster
+
+Sesje SSH używają `ssh -MNf -o ControlMaster=yes` z socketem w `/tmp/master_ssh/`.
+Kolejne polecenia do tego samego hosta reużywają socket (~5ms vs sekundy).
+Stany sesji: `rozłączony` → `łączenie` → `połączony` / `błąd`.
+
+## Curl bootstrap — `/join/<kod>`
+
+Mechanizm jednolinijkowego uruchomienia slave'a:
+
+1. Panel generuje jednorazowy 6-znakowy kod (POST `/api/token-jednorazowy`)
+2. Kod mapuje do konfiguracji: master, token, nazwa, https
+3. `GET /join/<kod>` zwraca `text/x-python`: preambułę env vars + pełny slave.py
+4. Kod jest jednorazowy — drugie pobranie zwraca 404
+5. Kod wygasa po 10 minutach
+
+## Tokeny i autoryzacja
+
+| Token | Cel | Ważność |
+|-------|-----|---------|
+| Token rejestracji | Slave dołącza do Mastera | Stały (plik/env var) |
+| Token bearer | Identyfikacja zarejestrowanego slave'a | Sesja |
+| Token panelu | Chronione endpointy API | Stały (plik/env var) |
+| Token jednorazowy | Pojedyncze dołączenie slave'a | 10 minut, jednorazowy |
+| Kod startowy | Skrót do curl bootstrap | 10 minut, jednorazowy |
+
+## Konteneryzacja
+
+`Dockerfile` buduje obraz Mastera z pakietem `master/`, `master_center.html`
+i `macros/`. `compose.yaml` montuje volume na dane trwałe i mapuje porty 9000
+(slave'y) i 8080 (panel).

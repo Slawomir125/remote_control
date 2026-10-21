@@ -1,47 +1,101 @@
-# Master–Slave — projekt edukacyjny
+# Master–Slave — system zdalnego sterowania
 
-Projekt pokazuje podstawowe zagadnienia programowania rozproszonego: komunikację
-klient–serwer, kolejkę zadań, wymianę wyników, przechowywanie stanu i prosty panel
-administracyjny. Nazwy „Master” i „Slave” oznaczają tu odpowiednio koordynator
-i klienta roboczego.
+Projekt implementuje rozproszoną architekturę Master–Slave do koordynowania
+pracy wielu klientów roboczych. Koordynator (Master) zarządza kolejką zadań,
+wydaje polecenia i udostępnia panel webowy. Klienci (Slaves) łączą się
+z Masterem, pobierają zadania, wykonują polecenia i odsyłają wyniki.
 
-## Ważne: to nie jest symulator
+## Główne funkcje
 
-Obecny kod może wykonywać na komputerze klienta rzeczywiste akcje zlecone przez
-koordynator, w tym uruchamiać procesy. Makra również uruchamiają programy, choć
-nie używają powłoki systemowej. Dlatego projekt nie jest bezpiecznym, wyłącznie
-demonstracyjnym C2 ani gotowym laboratorium. Nie uruchamiaj go na cudzych
-urządzeniach, w sieci produkcyjnej ani z publicznie dostępnym serwerem. Samo
-ograniczenie adresów do sieci lokalnej nie stanowi granicy bezpieczeństwa.
+- **Modularny koordynator** — pakiet `master/` (11 modułów) z dekoratorowym
+  systemem rejestracji endpointów, komend i typów pakietów.
+- **Panel Master Center** — interfejs przeglądarkowy z zakładkami Slaves i SSH,
+  terminalem poleceń, makrami, historią i KPI w czasie rzeczywistym.
+- **SSH Remote Control** — zarządzanie sesjami SSH z poziomu panelu
+  (ControlMaster, połączenia sesyjne, terminal SSH).
+- **Curl bootstrap** — uruchamianie slave'a jednym poleceniem:
+  `curl -s http://master:8080/join/<kod> | python3` — bez kopiowania plików
+  ani przepisywania tokenów.
+- **Makra z pełną składnią shella** — potoki, przekierowania, zmienne.
+- **Tokeny jednorazowe** — kody startowe z 10-minutowym wygaśnięciem.
+- **SQLite z WAL** — trwałe przechowywanie wyników i historii.
+- **Docker** — `Dockerfile` + `compose.yaml` do konteneryzacji Mastera.
 
-W repozytorium znajdują się lokalne bazy danych, pliki stanu oraz pliki
-poświadczeń. Nie należy ich publikować ani dodawać do kontroli wersji.
-`.gitignore` wyklucza typowe pliki tego rodzaju; przed publikacją sprawdź też
-historię repozytorium i upewnij się, że żadne sekrety nie zostały wcześniej
-zatwierdzone.
+## Struktura projektu
 
-## Główne elementy
+```
+├── master/                  # pakiet koordynatora (Python)
+│   ├── main.py              # punkt startowy, montaż komponentów
+│   ├── config.py            # stałe, ścieżki, rejestry, dekoratory
+│   ├── stan.py              # struktury danych (Stan, Slave, Polecenie)
+│   ├── baza.py              # SQLite, migracje, persystencja
+│   ├── logika.py            # rejestracja, polecenia, tokeny, makra
+│   ├── panel.py             # HTTP panel + endpointy API + /join/ bootstrap
+│   ├── serwer_slaves.py     # asyncio TCP serwer dla slave'ów
+│   ├── ssh.py               # SSH ControlMaster — sesje i endpointy
+│   ├── konsola.py           # interaktywna konsola Mastera
+│   ├── widoki.py            # serializacja stanu do JSON (snapshoty)
+│   └── zadania.py           # ocena odpowiedzi, tempo, statystyki
+├── master.py                # wrapper uruchamiający master/main.py
+├── master_center.html       # panel webowy (Slaves + SSH)
+├── slave.py                 # klient roboczy
+├── slave/slave.py           # kopia slave.py
+├── run_slaves.py            # uruchamianie wielu slave'ów (testy obciążeniowe)
+├── slave_board.py           # osobny mini-serwer HTTP
+├── macros/                  # pliki .sh z poleceniami
+├── Dockerfile               # obraz Mastera
+└── compose.yaml             # Docker Compose
+```
 
-- `master.py` — koordynator, zarządzanie stanem i kolejką, warstwa HTTP, konsola
-  oraz API wykorzystywane przez panel.
-- `slave.py` — klient roboczy: utrzymuje swój stan, komunikuje się z
-  koordynatorem, przetwarza zadania i obsługuje polecenia.
-- `slave/slave.py` — kopia `slave.py`; dwie kopie mogą z czasem się rozjechać.
-- `master_center.html` — interfejs przeglądarkowy do obserwowania stanu i
-  sterowania.
-- `run_slaves.py` — uruchamia wiele klientów do testów obciążeniowych.
-- `slave_board.py` — osobny, niewielki przykład serwera HTTP do prezentowania
-  zgłoszeń.
-- `macros/` — pliki z poleceniami odczytywanymi przez klienta.
-- `Dockerfile` i `compose.yaml` — konfiguracja uruchomienia koordynatora
-  w kontenerze.
+## Szybki start
 
-Więcej informacji o podziale odpowiedzialności i przepływie danych znajduje
-się w [ARCHITECTURE.md](./ARCHITECTURE.md).
+### Koordynator
 
-## Kierunek bezpiecznego rozwoju
+```bash
+python3 master.py
+# lub z Dockerem:
+docker compose up
+```
 
-Aby projekt nadawał się do bezpiecznych ćwiczeń, należy zastąpić prawdziwych
-klientów i akcje systemowe symulowanymi agentami oraz zamkniętym zestawem
-syntetycznych zdarzeń. Taka wersja powinna działać wyłącznie na danych
-testowych, bez uruchamiania procesów i bez łączenia się z zewnętrznymi hostami.
+Master uruchomi:
+- serwer slave'ów na porcie 9000
+- panel webowy na http://127.0.0.1:8080
+
+### Klient roboczy
+
+**Szybki sposób** (curl bootstrap — nie wymaga pliku slave.py na maszynie):
+
+1. W panelu Master Center wygeneruj jednorazowy kod startowy
+2. Na zdalnej maszynie:
+```bash
+curl -s http://master:8080/join/<kod> | python3
+```
+
+**Tradycyjny sposób** (wymaga slave.py):
+
+```bash
+python3 slave.py --master <adres> --token-rejestracji <token> --nazwa moj-slave
+```
+
+Slave obsługuje też zmienne środowiskowe: `SLAVE_MASTER`, `SLAVE_TOKEN`,
+`SLAVE_NAME`, `SLAVE_HTTPS`.
+
+## SSH Remote Control
+
+Zakładka SSH w panelu pozwala:
+- Dodawać hosty SSH (user@host:port)
+- Nawiązywać sesje ControlMaster (stałe połączenie ~5ms per komenda)
+- Wykonywać polecenia na zdalnych maszynach z terminala SSH
+- Łączyć/rozłączać wszystkie hosty jednym kliknięciem
+
+SSH i sterowanie slave'ami to osobne, niezależne funkcjonalności.
+
+## Bezpieczeństwo
+
+- Panel chroniony tokenem (plik `master_panel_token.txt`).
+- Slave'y autoryzowane tokenami bearer po rejestracji.
+- Tokeny jednorazowe wygasają po 10 minutach i działają tylko raz.
+- Nie wystawiaj panelu publicznie — używaj tunelu SSH.
+- `.gitignore` wyklucza bazy, tokeny, klucze i pliki stanu.
+
+Więcej szczegółów w [ARCHITECTURE.md](./ARCHITECTURE.md).
