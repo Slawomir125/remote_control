@@ -16,6 +16,7 @@ RUN groupadd --system master \
     && chown master:master /data
 
 COPY --chown=master:master master.py master_center.html ./
+COPY --chown=master:master master/ ./master/
 COPY --chown=master:master macros/ ./macros/
 
 USER master

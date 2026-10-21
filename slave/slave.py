@@ -214,19 +214,13 @@ def pol_makro(konfig, postep, args):
     if not args:
         raise ValueError("makro nie zawiera poleceń")
     wyniki = []
-    operatory = {"|", "||", "&", "&&", ";", ">", ">>", "<", "<<", "2>&1"}
     for numer, linia in enumerate(args, 1):
-        try:
-            argv = shlex.split(linia)
-        except ValueError:
-            raise ValueError(f"polecenie {numer}: nieprawidłowa składnia") from None
-        if not argv or any(arg in operatory for arg in argv):
-            raise ValueError(f"polecenie {numer}: pusta linia lub niedozwolony operator shella")
-        if Path(argv[0]).name == "sudo":
-            raise ValueError(f"polecenie {numer}: sudo nie jest obsługiwane w makrze")
+        linia = linia.strip()
+        if not linia:
+            continue
         try:
             wynik = subprocess.run(
-                argv, capture_output=True, text=True, timeout=5, shell=False
+                linia, capture_output=True, text=True, timeout=30, shell=True
             )
         except subprocess.TimeoutExpired:
             wyniki.append(f"{numer}. {linia}: timeout")
@@ -508,17 +502,22 @@ def praca(nazwa, host, port, opoznienie=1.0, cicho=False, stop=None, token=None,
 
 def parsuj_argumenty(argv=None):
     ap = argparse.ArgumentParser(description="Slave - liczy zadania od Master")
-    ap.add_argument("--nazwa", default=f"slave-{os.getpid()}")
-    ap.add_argument("--master", default=DEFAULT_MASTER_HOST, help="host albo host:port Master")
+    ap.add_argument("--nazwa", default=os.environ.get("SLAVE_NAME", f"slave-{os.getpid()}"))
+    ap.add_argument("--master", default=os.environ.get("SLAVE_MASTER", DEFAULT_MASTER_HOST),
+                    help="host albo host:port Master")
     ap.add_argument("--domena", default=None, help="publiczna domena Master, np. master.example.com")
     ap.add_argument("--port", type=int, help="port HTTP(S); domyślnie 443/80 lub port z --master")
-    ap.add_argument("--https", action=argparse.BooleanOptionalAction, default=DEFAULT_HTTPS,
+    _env_https = os.environ.get("SLAVE_HTTPS")
+    _https_default = (_env_https.lower() not in ("0", "false", "no")
+                      if _env_https is not None else DEFAULT_HTTPS)
+    ap.add_argument("--https", action=argparse.BooleanOptionalAction, default=_https_default,
                     help="wymuś HTTPS (domyślnie włączone)")
     ap.add_argument("--opoznienie", type=float, default=1.0,
                     help="pauza (s) między zadaniami, żeby nie zarzynać Master")
     ap.add_argument("--cicho", action="store_true", help="tylko ważne komunikaty (przy wielu Slaves)")
     ap.add_argument("--stan", type=Path, help="plik JSON stanu Slaves (domyślnie slave_state/<nazwa>.json)")
-    ap.add_argument("--token-rejestracji", help="token pierwszego dołączenia")
+    ap.add_argument("--token-rejestracji", default=os.environ.get("SLAVE_TOKEN"),
+                    help="token pierwszego dołączenia")
     a = ap.parse_args(argv)
     parsed = urlsplit("//" + a.master)
     host = parsed.hostname or a.master
