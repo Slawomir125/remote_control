@@ -115,6 +115,15 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
 .badge.conn{color:var(--ok);background:#10281f}
 .badge.disc{color:var(--mut);background:#1d2538}
 .badge.wait{color:var(--yel);background:#2a2410}
+/* hosty znane */
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.dot.on{background:var(--ok)} .dot.off{background:#555}
+.sortbar{display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.sortbar .lbl{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-right:4px}
+.sortbar button.active{background:var(--yel);color:#1b1500;border-color:var(--yel);font-weight:700}
+.tag{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;letter-spacing:.04em;text-transform:uppercase}
+.tag.ssh{color:var(--blue);background:#0f1d2e}
+.tag.slave{color:var(--yel);background:#2a2410}
 </style>
 </head>
 <body>
@@ -128,6 +137,7 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
 <nav class="tabs">
   <button class="tab-btn active" data-tab="slaves" onclick="switchTab('slaves')">Slaves</button>
   <button class="tab-btn" data-tab="ssh" onclick="switchTab('ssh')">SSH</button>
+  <button class="tab-btn" data-tab="hosty" onclick="switchTab('hosty')">Znane hosty</button>
 </nav>
 
 <main>
@@ -297,6 +307,37 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
       <div id="ssh-feed" style="height:640px;overflow-y:auto;font-family:var(--mono);font-size:12.5px"></div>
     </section>
   </div>
+</div>
+
+<div id="tab-hosty" class="tab-pane">
+  <section class="kpis" style="margin-bottom:14px">
+    <div class="card kpi"><div class="l">Hosty znane</div><div class="v" id="hz-k-razem">0</div><div class="s" id="hz-k-razem-s">&nbsp;</div></div>
+    <div class="card kpi"><div class="l">Aktywne</div><div class="v" id="hz-k-akt">0</div><div class="s">ostatni kontakt &lt; 15 s</div></div>
+    <div class="card kpi"><div class="l">Połączone</div><div class="v" id="hz-k-pol">0</div><div class="s">SSH: sesja żyje · Slave: nie wstrzymany</div></div>
+  </section>
+
+  <section class="card">
+    <h2>Znane hosty <span class="n mut">(SSH + Slaves)</span><span class="sp"></span>
+      <button class="ok" id="b-hz-polacz-all" title="Łączy wszystkie hosty SSH używając zapisanych danych">Połącz wszystkie SSH</button>
+    </h2>
+    <div class="sortbar">
+      <span class="lbl">Sortuj:</span>
+      <button data-sort="status" id="b-hz-sort-status">Status</button>
+      <button data-sort="typ" id="b-hz-sort-typ">Typ</button>
+      <button data-sort="ostatnio" id="b-hz-sort-ostatnio">Ostatnio</button>
+      <button data-sort="nazwa" id="b-hz-sort-nazwa">Nazwa</button>
+    </div>
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th>#</th><th>Typ</th><th>Nazwa</th><th>Adres</th>
+          <th>Status</th><th class="r">Ostatnio</th><th>Info</th>
+        </tr></thead>
+        <tbody id="hz-tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="hz-pusto">Brak znanych hostów. Dodaj Slave albo host SSH w pozostałych zakładkach.</div>
+  </section>
 </div>
 </main>
 
@@ -728,6 +769,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
   if (tab === 'ssh') sshTick();
+  else if (tab === 'hosty') hostyTick();
 }
 
 let sshSince = 0, sshInflight = false, sshPaused = false, sshBufor = [], sshZadan = 0;
@@ -869,7 +911,98 @@ $('#ssh-command').onkeydown = e => { if (e.key === 'Enter') sshWykonaj(); };
 $('#b-ssh-polacz-all').onclick = () => sshPolacz('*');
 $('#b-ssh-rozlacz-all').onclick = () => sshRozlacz('*');
 
-setInterval(() => { if (activeTab === 'ssh') sshTick(); }, 1500);
+setInterval(() => {
+  if (activeTab === 'ssh') sshTick();
+  else if (activeTab === 'hosty') hostyTick();
+}, 1500);
+
+// ─────────────────────────────────────── Znane hosty tab ─────────────────────
+let hostyInflight = false;
+let hostySort = localStorage.getItem('hostySort') || 'status';
+
+async function hostyTick() {
+  if (hostyInflight || activeTab !== 'hosty') return;
+  hostyInflight = true;
+  try {
+    const r = await fetch('/api/hosty-znane', {
+      cache: 'no-store', headers: {'X-Token': tokenEl.value}
+    });
+    if (!r.ok) return;
+    renderHosty(await r.json());
+  } catch(e) {} finally { hostyInflight = false; }
+}
+
+function sortujHosty(lista) {
+  const kopia = lista.slice();
+  if (hostySort === 'typ') {
+    kopia.sort((a, b) => (a.typ === b.typ ? a.nazwa.localeCompare(b.nazwa) : (a.typ === 'ssh' ? -1 : 1)));
+  } else if (hostySort === 'ostatnio') {
+    kopia.sort((a, b) => {
+      const av = a.ostatnio_s == null ? Infinity : a.ostatnio_s;
+      const bv = b.ostatnio_s == null ? Infinity : b.ostatnio_s;
+      return av - bv || a.nazwa.localeCompare(b.nazwa);
+    });
+  } else if (hostySort === 'nazwa') {
+    kopia.sort((a, b) => a.nazwa.localeCompare(b.nazwa));
+  } else { // status: połączone → aktywne → reszta, potem po nazwie
+    kopia.sort((a, b) => (Number(b.polaczony) - Number(a.polaczony))
+                     || (Number(b.aktywny) - Number(a.aktywny))
+                     || a.nazwa.localeCompare(b.nazwa));
+  }
+  return kopia;
+}
+
+function renderHosty(d) {
+  const hosty = sortujHosty(d.hosty || []);
+  const aktywne = hosty.filter(h => h.aktywny).length;
+  const polaczone = hosty.filter(h => h.polaczony).length;
+  $('#hz-k-razem').textContent = hosty.length;
+  $('#hz-k-razem-s').textContent = 'SSH: ' + (d.licznik_ssh || 0) + ' · Slaves: ' + (d.licznik_slaves || 0);
+  $('#hz-k-akt').textContent = aktywne;
+  $('#hz-k-pol').textContent = polaczone;
+
+  const tb = $('#hz-tbody');
+  tb.textContent = '';
+  for (const h of hosty) {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'mut', '#' + h.id));
+    tr.appendChild(el('td', null)).appendChild(el('span', 'tag ' + h.typ, h.typ === 'ssh' ? 'SSH' : 'SLAVE'));
+    tr.appendChild(el('td', null, h.nazwa));
+    tr.appendChild(el('td', 'mono mut', h.adres || '–'));
+
+    const tdS = el('td');
+    tdS.appendChild(el('span', 'dot ' + (h.aktywny ? 'on' : 'off')));
+    tdS.appendChild(document.createTextNode(h.aktywny ? 'AKTYWNY ' : 'NIEAKTYWNY '));
+    if (h.aktywny) {
+      tdS.appendChild(el('span', 'badge ' + (h.polaczony ? 'conn' : 'disc'),
+        h.polaczony ? 'POŁĄCZONY' : 'ROZŁĄCZONY'));
+    }
+    tr.appendChild(tdS);
+
+    tr.appendChild(el('td', 'r mut', h.ostatnio_s != null ? Math.floor(h.ostatnio_s) + 's' : '–'));
+    tr.appendChild(el('td', 'mono mut', (h.info || '').substring(0, 60)));
+    tb.appendChild(tr);
+  }
+  $('#hz-pusto').style.display = hosty.length ? 'none' : 'block';
+}
+
+function ustawSortowanie(klucz) {
+  hostySort = klucz;
+  localStorage.setItem('hostySort', klucz);
+  for (const b of document.querySelectorAll('.sortbar button')) {
+    b.classList.toggle('active', b.dataset.sort === klucz);
+  }
+  // ponowny render z tego co ostatnio pobraliśmy — najprościej: tick
+  hostyTick();
+}
+
+for (const b of document.querySelectorAll('.sortbar button')) {
+  b.onclick = () => ustawSortowanie(b.dataset.sort);
+}
+ustawSortowanie(hostySort);
+
+$('#b-hz-polacz-all').onclick = () => sshPolacz('*').then(() => hostyTick());
+
 setInterval(tick, 1000);
 tick();
 </script>
