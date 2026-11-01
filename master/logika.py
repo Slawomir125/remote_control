@@ -1,13 +1,11 @@
-"""Logika koordynatora: rejestracja, polecenia, przetwarzanie pracy, makra."""
+"""Logika koordynatora: rejestracja, sesje, polecenia, przetwarzanie pracy, makra."""
 
 import json
 import secrets
 import time
-from pathlib import Path
 
 from master.config import (
     MACRO_DIR, POLECENIE_TTL_S, MAX_POLECEN, POLECENIA_SLAVES,
-    CELE_WSZYSTKIE, TOKEN_JEDNORAZOWY_WAZNY_S,
 )
 from master.stan import Slave, Polecenie, log, log_zadania
 from master.zadania import ocen_odpowiedz, przytnij_okno, zlicz_sekunde
@@ -26,15 +24,18 @@ def zarejestruj(stan, nazwa):
     with stan.lock:
         for slave_id, slave in stan.slaves.items():
             if slave.nazwa == nazwa:
+                # Jeżeli admin wcześniej rozłączył slave'a, re-rejestracja nie
+                # może tego nadpisać — intencja Rozłącz musi przeżyć restart slave'a.
+                if slave.sesja != "rozłączony":
+                    slave.sesja = "połączony"
                 return slave_id, slave.token
         slave_id = str(len(stan.slaves) + 1)
         token = secrets.token_urlsafe(32)
-        slave = stan.slaves[slave_id] = Slave(nazwa, token)
-        slave.rozgl_ack = stan.ostatnie_rozgl_id        # nowy Slave nie dostaje starych poleceń
+        slave = stan.slaves[slave_id] = Slave(nazwa, token, sesja="połączony")
         stan.nowi.append((slave_id, nazwa))
         with stan.db_lock:
-            stan.db.execute("INSERT INTO slaves VALUES (?,?,?,?)",
-                            (slave_id, nazwa, token, time.time()))
+            stan.db.execute("INSERT INTO slaves VALUES (?,?,?,?,?)",
+                            (slave_id, nazwa, token, time.time(), "połączony"))
             stan.db.commit()
     return slave_id, token
 
@@ -45,63 +46,39 @@ def odrzuc(stan, powod):
         stan.odrzucone[powod] += 1
 
 
-# ─── tokeny jednorazowe ─────────────────────────────────────────────────────
+# ─── sesje per Slave ────────────────────────────────────────────────────────
 
-def wygeneruj_token_jednorazowy(stan, etykieta="", wazny_s=TOKEN_JEDNORAZOWY_WAZNY_S):
-    """Tworzy token rejestracyjny do jednorazowego użytku."""
-    teraz = time.time()
-    token = secrets.token_urlsafe(24)
+def _persistuj_sesje(stan, slave_id, sesja):
+    """Zapisuje intencję admina do DB — dzięki temu rozłączenie/otwarcie przeżywa restart."""
+    with stan.db_lock:
+        stan.db.execute("UPDATE slaves SET sesja=? WHERE id=?", (sesja, slave_id))
+        stan.db.commit()
+
+
+def polacz_slave(stan, slave_id):
+    """Admin otwiera sesję — czeka aż Slave się odezwie (następny poll)."""
     with stan.lock:
-        for stary, (wygasa, _) in list(stan.jednorazowe.items()):
-            if wygasa <= teraz:
-                del stan.jednorazowe[stary]
-        stan.jednorazowe[token] = (teraz + wazny_s, etykieta)
-    dodaj_zdarzenie(stan, "sys", tekst="Wygenerowano jednorazowy kod startowy"
-                     + (f" dla '{etykieta}'" if etykieta else ""))
-    return token, teraz + wazny_s
+        slave = stan.slaves.get(slave_id)
+        if slave is None:
+            raise ValueError(f"Nie znaleziono Slave #{slave_id}")
+        slave.sesja = "łączenie"
+        nazwa = slave.nazwa
+    _persistuj_sesje(stan, slave_id, "łączenie")
+    dodaj_zdarzenie(stan, "sys", tekst=f"~ #{slave_id} '{nazwa}': sesja otwarta (łączenie)")
+    log(stan, f"~ #{slave_id} '{nazwa}': sesja otwarta (łączenie)", True)
 
 
-def wygeneruj_kod_startowy(stan, master_addr, https, port, nazwa):
-    """Generuje krótki 6-znakowy kod + token jednorazowy do curl | python3."""
-    kod = secrets.token_urlsafe(4)
-    token, wygasa = wygeneruj_token_jednorazowy(stan, etykieta=nazwa)
-    teraz = time.time()
+def rozlacz_slave(stan, slave_id):
+    """Admin zamyka sesję — Slave dostaje 503 przy kolejnych pollach."""
     with stan.lock:
-        for stary, dane in list(stan.kody_startowe.items()):
-            if dane["wygasa"] <= teraz:
-                del stan.kody_startowe[stary]
-        stan.kody_startowe[kod] = {
-            "token": token, "master": master_addr,
-            "https": https, "port": port, "nazwa": nazwa, "wygasa": wygasa,
-        }
-    return kod, token, wygasa
-
-
-def token_jednorazowy_zuzyj(stan, token):
-    """Sprawdza jednorazowy token i od razu go usuwa."""
-    teraz = time.time()
-    with stan.lock:
-        wpis = stan.jednorazowe.pop(token, None)
-    if wpis is None:
-        return False
-    wygasa, _etykieta = wpis
-    return wygasa > teraz
-
-
-# ─── sterowanie Master ───────────────────────────────────────────────────────
-
-def uruchom_master(stan):
-    """Master zaczyna odpowiadać Slaves."""
-    stan.pracuje = True
-    dodaj_zdarzenie(stan, "sys", tekst="START - Master słucha Slaves")
-    log(stan, "START - Master słucha Slaves", True)
-
-
-def wstrzymaj_master(stan):
-    """Master znów ignoruje wszystkich (Slaves czekają i ponawiają)."""
-    stan.pracuje = False
-    dodaj_zdarzenie(stan, "sys", tekst="STOP - Master ignoruje Slaves")
-    log(stan, "STOP - Master ignoruje Slaves", True)
+        slave = stan.slaves.get(slave_id)
+        if slave is None:
+            raise ValueError(f"Nie znaleziono Slave #{slave_id}")
+        slave.sesja = "rozłączony"
+        nazwa = slave.nazwa
+    _persistuj_sesje(stan, slave_id, "rozłączony")
+    dodaj_zdarzenie(stan, "sys", tekst=f"~ #{slave_id} '{nazwa}': sesja zamknięta")
+    log(stan, f"~ #{slave_id} '{nazwa}': sesja zamknięta", True)
 
 
 # ─── zapis wyników ───────────────────────────────────────────────────────────
@@ -151,7 +128,7 @@ def znajdz_slaves(stan, cel):
 
 
 def wydaj_polecenie(stan, cel, nazwa, args):
-    """Kolejkuje polecenie dla jednego Slave albo wszystkich."""
+    """Kolejkuje polecenie dla jednego Slave (bez broadcastu — każdy osobno)."""
     nazwa = nazwa.strip().lower()
     if nazwa not in POLECENIA_SLAVES:
         raise ValueError(f"nieznane polecenie '{nazwa}'. Znane: {', '.join(POLECENIA_SLAVES)}")
@@ -159,39 +136,26 @@ def wydaj_polecenie(stan, cel, nazwa, args):
         raise ValueError("Argumenty polecenia są za długie albo jest ich za dużo.")
     args = [str(a) for a in args]
     with stan.lock:
-        cel = "wszystkie" if cel.strip().lower() in CELE_WSZYSTKIE else znajdz_slaves(stan, cel)
+        cel_id = znajdz_slaves(stan, cel)
         stan.licznik_polecen += 1
-        p = Polecenie(stan.licznik_polecen, nazwa, args, time.time(), cel)
-        if cel == "wszystkie":
-            p.adresaci = len(stan.slaves)
-            stan.rozgloszenia.append(p)
-            stan.ostatnie_rozgl_id = p.id
-        else:
-            p.adresaci = 1
-            stan.slaves[cel].polecenia.append(p)
+        p = Polecenie(stan.licznik_polecen, nazwa, args, time.time(), cel_id)
+        p.adresaci = 1
+        stan.slaves[cel_id].polecenia.append(p)
         stan.polecenia[p.id] = p
         while len(stan.polecenia) > MAX_POLECEN:
             stan.polecenia.pop(next(iter(stan.polecenia)))
     tresc = f"{nazwa} {' '.join(args)}".strip()
-    adresat = "do wszystkich" if cel == "wszystkie" else f"do #{cel}"
-    dodaj_zdarzenie(stan, "sys", tekst=f"> polecenie #{p.id} '{tresc}' {adresat}")
+    dodaj_zdarzenie(stan, "sys", tekst=f"> polecenie #{p.id} '{tresc}' do #{cel_id}")
     return p
 
 
 def zbierz_polecenia(stan, slave, teraz):
     """Polecenia do wysłania Slave w tej odpowiedzi (ścieżka zwykła O(1))."""
-    wyslij = []
-    if slave.polecenia:
-        slave.polecenia = [p for p in slave.polecenia if teraz - p.ts <= POLECENIE_TTL_S]
-        wyslij.extend(slave.polecenia)
-    if slave.rozgl_ack < stan.ostatnie_rozgl_id:
-        swieze = [p for p in stan.rozgloszenia if p.id > slave.rozgl_ack and teraz - p.ts <= POLECENIE_TTL_S]
-        if swieze:
-            wyslij.extend(swieze)
-        else:
-            slave.rozgl_ack = stan.ostatnie_rozgl_id
-    wyslij.sort(key=lambda p: p.id)
-    return [{"id": p.id, "polecenie": p.nazwa, "args": p.args, "rozgl": p.cel == "wszystkie"}
+    if not slave.polecenia:
+        return []
+    slave.polecenia = [p for p in slave.polecenia if teraz - p.ts <= POLECENIE_TTL_S]
+    wyslij = sorted(slave.polecenia, key=lambda p: p.id)
+    return [{"id": p.id, "polecenie": p.nazwa, "args": p.args}
             for p in wyslij[:20]]
 
 
@@ -206,38 +170,41 @@ def przyjmij_potwierdzenia(stan, slave_id, slave, potwierdzenia):
         pol = stan.polecenia.get(pid)
         if pol is None:
             continue
-        if p.get("rozgl"):
-            if pol.cel != "wszystkie" or pol.id <= slave.rozgl_ack:
-                continue
-            slave.rozgl_ack = pol.id
-        else:
-            if not any(x is pol for x in slave.polecenia):
-                continue
-            slave.polecenia = [x for x in slave.polecenia if x is not pol]
+        if not any(x is pol for x in slave.polecenia):
+            continue
+        slave.polecenia = [x for x in slave.polecenia if x is not pol]
         ok, wynik = bool(p.get("ok")), str(p.get("wynik", ""))
         if pol.nazwa != "makro":
             wynik = wynik[:1000]
-        pierwsze_potwierdzenie = pol.wykonane == 0
         pol.wykonane += 1
         pol.bledy += 0 if ok else 1
-        pol.przyklad = pol.przyklad or wynik[:200]
-        if pol.cel != "wszystkie" or pierwsze_potwierdzenie or pol.nazwa in {"exec", "makro"}:
-            tekst = f"< #{slave_id} {slave.nazwa}: {pol.nazwa} -> {wynik}" + ("" if ok else "  [BŁĄD]")
-            dodaj_zdarzenie(stan, "sys", tekst=tekst, command_id=pol.id,
-                            slave_id=slave_id, slave_nazwa=slave.nazwa, wynik=wynik, ok=ok)
-            wpis_logu = (f"< #{slave_id} {slave.nazwa}: makro -> wynik {len(wynik)} znaków"
-                         if pol.nazwa == "makro" else tekst)
-            log(stan, wpis_logu, True)
+        pol.przyklad = pol.przyklad or wynik[:2000 if pol.nazwa == "promuj_ssh" else 200]
+        tekst = f"< #{slave_id} {slave.nazwa}: {pol.nazwa} -> {wynik}" + ("" if ok else "  [BŁĄD]")
+        dodaj_zdarzenie(stan, "sys", tekst=tekst, command_id=pol.id,
+                        slave_id=slave_id, slave_nazwa=slave.nazwa, wynik=wynik, ok=ok)
+        wpis_logu = (f"< #{slave_id} {slave.nazwa}: makro -> wynik {len(wynik)} znaków"
+                     if pol.nazwa == "makro" else tekst)
+        log(stan, wpis_logu, True)
 
 
 # ─── przetwarzanie pracy ────────────────────────────────────────────────────
 
+SESJA_ROZLACZONA = object()  # sentinel — serwer_slaves zamienia na HTTP 503
+
+
 def przetworz_prace(stan, slave_id, dane):
-    """Jeden pakiet 'praca': potwierdzenia poleceń i odpytywanie o kolejne."""
+    """Jeden pakiet 'praca': potwierdzenia poleceń i odpytywanie o kolejne.
+
+    Zwraca SESJA_ROZLACZONA, gdy admin zamknął sesję — serwer odpowiada 503.
+    """
     linia_logu = None
     with stan.lock:
         slave = stan.slaves[slave_id]
+        if slave.sesja == "rozłączony":
+            return SESJA_ROZLACZONA
         teraz = time.time()
+        if slave.sesja != "połączony":
+            slave.sesja = "połączony"
         slave.ostatnio = teraz
         slave.pauza = bool(dane.get("pauza"))
         przyjmij_potwierdzenia(stan, slave_id, slave, dane.get("potwierdzenia"))

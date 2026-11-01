@@ -23,10 +23,13 @@ Uruchom:  python slave.py --master master.example.com --token-rejestracji <token
 """
 import argparse
 import functools
+import hashlib
 import json
 import os
 import random
 import shlex
+import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -46,6 +49,9 @@ MIN_ODPYTYWANIE_S = 1.0
 MAX_ODPYTYWANIE_S = 5.0
 DEFAULT_MASTER_HOST = "localhost"
 DEFAULT_HTTPS = True
+PLIKI_CHUNK_B = 3 * 1024 * 1024                              # chunk transferu, zgodny z masterem
+PLIKI_TIMEOUT_S = 60                                         # per-chunk timeout
+PLIKI_MAX_B = 10 * 1024 * 1024 * 1024                        # górny bezpiecznik slave'a (10 GiB)
 
 # ================================================================== REJESTRY ==
 
@@ -101,6 +107,11 @@ class Postep:
     stop: bool = False
     potwierdzenia: list = field(default_factory=list)       # wyniki poleceń do odesłania
     wykonane: deque = field(default_factory=lambda: deque(maxlen=200))   # ID wykonanych poleceń (bez dubli)
+    # Dostęp dla komend transferu plików (ustawiane raz po rejestracji w uruchom()).
+    slave_id: Optional[str] = None
+    token: Optional[str] = None
+    lacze: Optional[object] = None
+    aktualne_cid: Optional[int] = None                      # id obecnie wykonywanego polecenia
 
 
 def loguj(konfig, *tekst, wazne=True):
@@ -188,6 +199,488 @@ def pol_stop(konfig, postep, args):
     return "kończę pracę"
 
 
+# ─── transfer plików: HTTP helpers i komendy ───────────────────────────────
+
+def _url_pliku(lacze, sciezka):
+    """Buduje pełny URL do /plik/<sciezka>?... używając tego samego hosta co /api/slave/*."""
+    scheme = "https" if lacze.https else "http"
+    authority = lacze.domena or lacze.host
+    if ":" in authority and not authority.startswith("["):
+        authority = f"[{authority}]"
+    default_port = 443 if lacze.https else 80
+    if lacze.port and lacze.port != default_port:
+        authority = f"{authority}:{lacze.port}"
+    return f"{scheme}://{authority}{sciezka}"
+
+
+def _plik_pobierz_chunk(lacze, slave_id, token, pol_id, off, limit=PLIKI_CHUNK_B,
+                        timeout=PLIKI_TIMEOUT_S):
+    """GET /plik/pobierz?pol=X&slave=S&off=Y&limit=N. Zwraca (bajty, total_opt) albo (None, msg)."""
+    url = _url_pliku(lacze, f"/plik/pobierz?pol={pol_id}&slave={quote(str(slave_id))}"
+                            f"&off={off}&limit={limit}")
+    req = urllib.request.Request(url, method="GET",
+                                 headers={"Authorization": f"Bearer {token}",
+                                          "User-Agent": "gru-minionki-slave/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read(limit + 1024), None
+    except urllib.error.HTTPError as e:
+        try:
+            tresc = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            tresc = str(e)
+        return None, f"HTTP {e.code}: {tresc}"
+    except (OSError, ValueError) as e:
+        return None, f"sieć: {e}"
+
+
+def _plik_wyslij_chunk(lacze, slave_id, token, pol_id, off, final, chunk,
+                       timeout=PLIKI_TIMEOUT_S):
+    """POST /plik/wyslij?pol=X&slave=S&off=Y&final=0|1 z surowymi bajtami. Zwraca (True, odebrano) albo (False, msg)."""
+    url = _url_pliku(lacze, f"/plik/wyslij?pol={pol_id}&slave={quote(str(slave_id))}"
+                            f"&off={off}&final={1 if final else 0}")
+    req = urllib.request.Request(url, method="POST", data=chunk,
+                                 headers={"Content-Type": "application/octet-stream",
+                                          "Content-Length": str(len(chunk)),
+                                          "Authorization": f"Bearer {token}",
+                                          "User-Agent": "gru-minionki-slave/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read(4096)
+            try:
+                d = json.loads(body)
+                return bool(d.get("ok")), d.get("odebrano", 0)
+            except (ValueError, json.JSONDecodeError):
+                return False, "nieparsowalna odpowiedź"
+    except urllib.error.HTTPError as e:
+        try:
+            tresc = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            tresc = str(e)
+        return False, f"HTTP {e.code}: {tresc}"
+    except (OSError, ValueError) as e:
+        return False, f"sieć: {e}"
+
+
+@polecenie("wyslij")
+def pol_wyslij(konfig, postep, args):
+    """args: [sciezka_lokalna]. Slave czyta plik i strumieniuje chunkami do staging mastera."""
+    if not args:
+        return "BLAD podaj ścieżkę pliku"
+    sciezka = Path(args[0])
+    if not sciezka.is_file():
+        return f"BLAD plik nie istnieje: {sciezka}"
+    try:
+        rozmiar = sciezka.stat().st_size
+    except OSError as e:
+        return f"BLAD stat: {e}"
+    if rozmiar > PLIKI_MAX_B:
+        return f"BLAD plik większy niż limit {PLIKI_MAX_B}"
+    pol_id = postep.aktualne_cid
+    if pol_id is None or postep.lacze is None:
+        return "BLAD brak kontekstu polecenia"
+    hasher = hashlib.sha256()
+    off = 0
+    try:
+        with sciezka.open("rb") as f:
+            while True:
+                chunk = f.read(PLIKI_CHUNK_B)
+                if not chunk and off > 0:
+                    # Pusty finalizer dla pliku o rozmiarze dokładnie wielokrotności chunk.
+                    ok, msg = _plik_wyslij_chunk(postep.lacze, postep.slave_id, postep.token,
+                                                  pol_id, off, True, b"")
+                    if not ok:
+                        return f"BLAD finalize: {msg}"
+                    break
+                final = (off + len(chunk) >= rozmiar)
+                hasher.update(chunk)
+                ok, msg = _plik_wyslij_chunk(postep.lacze, postep.slave_id, postep.token,
+                                              pol_id, off, final, chunk)
+                if not ok:
+                    return f"BLAD chunk off={off}: {msg}"
+                off += len(chunk)
+                if final:
+                    break
+    except OSError as e:
+        return f"BLAD odczyt: {e}"
+    return f"OK {off} B sha256={hasher.hexdigest()}"
+
+
+@polecenie("pobierz")
+def pol_pobierz(konfig, postep, args):
+    """args: [sciezka_lokalna, oczekiwany_sha256, oczekiwany_rozmiar].
+    Slave strumieniuje plik ze staging mastera chunkami i zapisuje pod podaną ścieżką."""
+    if len(args) < 1:
+        return "BLAD podaj ścieżkę docelową"
+    sciezka = Path(args[0])
+    oczekiwany_sha = args[1].lower() if len(args) > 1 else ""
+    try:
+        oczekiwany_rozmiar = int(args[2]) if len(args) > 2 else -1
+    except ValueError:
+        oczekiwany_rozmiar = -1
+    pol_id = postep.aktualne_cid
+    if pol_id is None or postep.lacze is None:
+        return "BLAD brak kontekstu polecenia"
+    try:
+        sciezka.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return f"BLAD mkdir: {e}"
+    tymczasowy = sciezka.with_name(f".{sciezka.name}.{os.getpid()}.part")
+    hasher = hashlib.sha256()
+    off = 0
+    try:
+        with tymczasowy.open("wb") as f:
+            while True:
+                bajty, blad = _plik_pobierz_chunk(postep.lacze, postep.slave_id, postep.token,
+                                                   pol_id, off)
+                if bajty is None:
+                    try: tymczasowy.unlink()
+                    except OSError: pass
+                    return f"BLAD chunk off={off}: {blad}"
+                if not bajty:
+                    break
+                f.write(bajty)
+                hasher.update(bajty)
+                off += len(bajty)
+                if off > PLIKI_MAX_B:
+                    try: tymczasowy.unlink()
+                    except OSError: pass
+                    return f"BLAD plik przekracza {PLIKI_MAX_B}"
+        got_sha = hasher.hexdigest()
+        if oczekiwany_rozmiar >= 0 and off != oczekiwany_rozmiar:
+            try: tymczasowy.unlink()
+            except OSError: pass
+            return f"BLAD rozmiar={off} vs oczekiwany {oczekiwany_rozmiar}"
+        if oczekiwany_sha and got_sha != oczekiwany_sha:
+            try: tymczasowy.unlink()
+            except OSError: pass
+            return f"BLAD sha256={got_sha} vs oczekiwany {oczekiwany_sha}"
+        os.replace(tymczasowy, sciezka)
+    except OSError as e:
+        try: tymczasowy.unlink()
+        except OSError: pass
+        return f"BLAD zapis: {e}"
+    return f"OK {off} B → {sciezka} sha256={got_sha}"
+
+
+def _lokalne_ipv4():
+    """Lista adresów IPv4 interfejsów (bez loopback), pierwszy — najbardziej "wychodzący"."""
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.append(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+    except (socket.gaierror, OSError):
+        pass
+    return ips[:5]
+
+
+def _publiczne_ipv4():
+    """Pyta zewnętrzny serwis o publiczne IP (timeout 3s, kilka źródeł)."""
+    dozwolone = set("0123456789.:abcdefABCDEF")
+    for url in ("https://api.ipify.org", "https://ifconfig.me/ip",
+                "https://icanhazip.com", "https://ipv4.icanhazip.com"):
+        try:
+            with urllib.request.urlopen(url, timeout=3) as r:
+                ip = r.read(60).decode("ascii", "ignore").strip()
+                if ip and 7 <= len(ip) <= 45 and all(c in dozwolone for c in ip):
+                    return ip
+        except (urllib.error.URLError, OSError, UnicodeError, ValueError):
+            continue
+    return ""
+
+
+# ----- helpery: zapewnij działający sshd ------------------------------------
+
+def _uruchom(argv, *, timeout, env=None):
+    """Thin wrapper: zwraca (rc, tekst) obciętego do 400 znaków. shell=False."""
+    try:
+        wynik = subprocess.run(argv, capture_output=True, text=True,
+                               timeout=timeout, shell=False, env=env)
+        tekst = (wynik.stdout + wynik.stderr).strip()
+        return wynik.returncode, tekst[:400]
+    except subprocess.TimeoutExpired:
+        return 124, f"timeout ({timeout}s)"
+    except OSError as e:
+        return 127, f"błąd OS: {e}"
+
+
+def _prefiks_sudo():
+    """Zwraca [] gdy root, ['sudo','-n'] gdy sudo bez hasła dostępne, inaczej None."""
+    try:
+        if os.geteuid() == 0:
+            return []
+    except AttributeError:
+        pass
+    if shutil.which("sudo") is None:
+        return None
+    rc, _ = _uruchom(["sudo", "-n", "true"], timeout=3)
+    return ["sudo", "-n"] if rc == 0 else None
+
+
+def _dopisz_akcje(info, tekst):
+    akcje = info.setdefault("sshd_akcje", [])
+    if len(akcje) < 10:
+        akcje.append(tekst[:120])
+
+
+def _wykryj_init():
+    if shutil.which("systemctl") and Path("/run/systemd/system").exists():
+        return "systemd"
+    return ""
+
+
+def _wykryj_pakmen():
+    for pm in ("pacman", "apt-get", "dnf", "yum", "apk", "zypper"):
+        if shutil.which(pm):
+            return pm
+    return ""
+
+
+def _komenda_instalacji(pm):
+    """Zwraca (argv, env) do instalacji openssh-server przez wykryty pakmen."""
+    env = None
+    if pm == "pacman":
+        argv = ["pacman", "-S", "--noconfirm", "--needed", "openssh"]
+    elif pm == "apt-get":
+        argv = ["apt-get", "-y", "install", "openssh-server"]
+        env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
+    elif pm in ("dnf", "yum"):
+        argv = [pm, "-y", "install", "openssh-server"]
+    elif pm == "apk":
+        argv = ["apk", "add", "--no-cache", "openssh"]
+    elif pm == "zypper":
+        argv = ["zypper", "--non-interactive", "install", "openssh"]
+    else:
+        return None, None
+    return argv, env
+
+
+def _wykryj_port_sshd():
+    """Z /etc/ssh/sshd_config{,.d/*} oraz `ss -tlnp` → port sshd. Fallback 22."""
+    port = 22
+    pliki = [Path("/etc/ssh/sshd_config")]
+    try:
+        pliki += sorted(Path("/etc/ssh/sshd_config.d").glob("*.conf"))
+    except OSError:
+        pass
+    for p in pliki:
+        try:
+            for linia in p.read_text(encoding="utf-8", errors="replace").splitlines():
+                s = linia.strip()
+                if s.startswith("#") or not s.lower().startswith("port"):
+                    continue
+                czesci = s.split()
+                if len(czesci) == 2 and czesci[0].lower() == "port":
+                    try:
+                        port = int(czesci[1])
+                    except ValueError:
+                        pass
+        except OSError:
+            continue
+    if shutil.which("ss"):
+        rc, tekst = _uruchom(["ss", "-tlnp"], timeout=5)
+        if rc == 0:
+            for linia in tekst.splitlines():
+                if "sshd" not in linia:
+                    continue
+                for pole in linia.split():
+                    if ":" in pole and pole.rsplit(":", 1)[1].isdigit():
+                        try:
+                            port = int(pole.rsplit(":", 1)[1])
+                            break
+                        except ValueError:
+                            pass
+                break
+    return port
+
+
+def _sshd_dziala():
+    if shutil.which("systemctl"):
+        for svc in ("ssh", "sshd"):
+            rc, _ = _uruchom(["systemctl", "is-active", "--quiet", svc], timeout=5)
+            if rc == 0:
+                return True
+    if shutil.which("pgrep"):
+        rc, _ = _uruchom(["pgrep", "-x", "sshd"], timeout=5)
+        if rc == 0:
+            return True
+    return False
+
+
+def _zainstaluj_sshd(info):
+    """Instaluje openssh-server. Mutuje info; nie podnosi."""
+    if shutil.which("sshd"):
+        return True
+    pm = _wykryj_pakmen()
+    if not pm:
+        info["sshd_blad"] = info.get("sshd_blad") or "sshd nie zainstalowany, brak pakmena"
+        _dopisz_akcje(info, "brak znanego pakmena (pacman/apt/dnf/apk/zypper)")
+        return False
+    prefiks = _prefiks_sudo()
+    if prefiks is None:
+        info["sshd_blad"] = info.get("sshd_blad") or "sshd nie zainstalowany, brak uprawnień root/sudo"
+        _dopisz_akcje(info, f"brak sshd + brak sudo (pakmen: {pm})")
+        return False
+    argv, env = _komenda_instalacji(pm)
+    if argv is None:
+        info["sshd_blad"] = info.get("sshd_blad") or f"brak receptury instalacji dla {pm}"
+        return False
+    _dopisz_akcje(info, f"instaluję openssh ({pm})")
+    rc, tekst = _uruchom(prefiks + argv, timeout=180, env=env)
+    if rc == 0:
+        _dopisz_akcje(info, f"{pm} install openssh — ok")
+        return True
+    info["sshd_blad"] = info.get("sshd_blad") or f"{pm} install nie powiodło się (rc={rc})"
+    _dopisz_akcje(info, f"{pm} install rc={rc}: {tekst[:80]}")
+    return False
+
+
+def _wystartuj_sshd(info):
+    """systemctl enable --now <svc>; fallback na service/rc-service."""
+    prefiks = _prefiks_sudo()
+    if prefiks is None:
+        info["sshd_blad"] = info.get("sshd_blad") or "nie mogę wystartować sshd bez root/sudo"
+        _dopisz_akcje(info, "brak uprawnień do uruchomienia sshd")
+        return False
+    if _wykryj_init() == "systemd":
+        for svc in ("ssh", "sshd"):
+            rc, tekst = _uruchom(prefiks + ["systemctl", "enable", "--now", svc], timeout=20)
+            if rc == 0:
+                _dopisz_akcje(info, f"sshd uruchomiony (serwis: {svc})")
+                return True
+            if "could not be found" in tekst.lower() or "not found" in tekst.lower():
+                continue
+            _dopisz_akcje(info, f"systemctl enable --now {svc} rc={rc}: {tekst[:80]}")
+        info["sshd_blad"] = info.get("sshd_blad") or "systemctl enable --now nie powiódł się"
+        return False
+    for cmd in (["service", "ssh", "start"], ["service", "sshd", "start"],
+                ["rc-service", "sshd", "start"]):
+        if shutil.which(cmd[0]) is None:
+            continue
+        rc, tekst = _uruchom(prefiks + cmd, timeout=20)
+        if rc == 0:
+            _dopisz_akcje(info, f"sshd uruchomiony ({' '.join(cmd)})")
+            return True
+        _dopisz_akcje(info, f"{' '.join(cmd)} rc={rc}: {tekst[:60]}")
+    info["sshd_blad"] = info.get("sshd_blad") or "nie udało się uruchomić sshd"
+    return False
+
+
+def _otworz_firewall(info, port):
+    """Best-effort: ufw / firewalld. Nie ustawia sshd_blad przy niepowodzeniu."""
+    prefiks = _prefiks_sudo()
+    if prefiks is None:
+        return
+    if shutil.which("ufw"):
+        rc, tekst = _uruchom(["ufw", "status"], timeout=5)
+        if rc == 0 and "Status: active" in tekst:
+            rc2, tekst2 = _uruchom(prefiks + ["ufw", "allow", f"{port}/tcp"], timeout=10)
+            if rc2 == 0:
+                _dopisz_akcje(info, f"ufw: otwarto {port}/tcp")
+            else:
+                _dopisz_akcje(info, f"ufw allow {port}/tcp rc={rc2}: {tekst2[:60]}")
+            return
+    if shutil.which("firewall-cmd"):
+        rc, tekst = _uruchom(["firewall-cmd", "--state"], timeout=5)
+        if rc == 0 and tekst.strip() == "running":
+            rc2, tekst2 = _uruchom(prefiks + ["firewall-cmd", f"--add-port={port}/tcp",
+                                              "--permanent"], timeout=10)
+            if rc2 == 0:
+                _uruchom(prefiks + ["firewall-cmd", "--reload"], timeout=10)
+                _dopisz_akcje(info, f"firewalld: otwarto {port}/tcp")
+            else:
+                _dopisz_akcje(info, f"firewall-cmd rc={rc2}: {tekst2[:60]}")
+
+
+def _zapewnij_sshd(info):
+    """Pełna orkiestracja: wykryj / zainstaluj / wystartuj / otwórz firewall."""
+    if _sshd_dziala():
+        info["sshd_status"] = "running"
+        _dopisz_akcje(info, "sshd już działa")
+        info["sshd_port_wykryty"] = _wykryj_port_sshd()
+        return
+    if not shutil.which("sshd"):
+        _dopisz_akcje(info, "sshd nie zainstalowany")
+        if not _zainstaluj_sshd(info):
+            info["sshd_status"] = "failed"
+            return
+    if not _wystartuj_sshd(info):
+        info["sshd_status"] = "failed"
+        return
+    if _sshd_dziala():
+        info["sshd_status"] = "started"
+        info["sshd_port_wykryty"] = _wykryj_port_sshd()
+        _otworz_firewall(info, info["sshd_port_wykryty"])
+    else:
+        info["sshd_status"] = "failed"
+        info["sshd_blad"] = info.get("sshd_blad") or "sshd nadal nie działa po próbie startu"
+
+
+@polecenie("promuj_ssh")
+def pol_promuj_ssh(konfig, postep, args):
+    """Instaluje klucz publiczny Mastera w ~/.ssh/authorized_keys, zapewnia że
+    sshd działa (instalacja/start/firewall), i raportuje do Mastera adresy IP,
+    nazwę hosta, użytkownika oraz wykryty port sshd."""
+    if not args:
+        raise ValueError("brak klucza publicznego")
+    klucz = args[0].strip()
+    if not klucz.startswith("ssh-") or "\n" in klucz:
+        raise ValueError("nieprawidłowy klucz publiczny")
+
+    home = Path.home()
+    ssh_dir = home / ".ssh"
+    auth = ssh_dir / "authorized_keys"
+    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+    try: os.chmod(ssh_dir, 0o700)
+    except OSError: pass
+
+    dodano = True
+    if auth.exists():
+        istniejace = auth.read_text(encoding="utf-8", errors="replace").splitlines()
+        if any(linia.strip() == klucz for linia in istniejace):
+            dodano = False
+    if dodano:
+        with auth.open("a", encoding="utf-8") as f:
+            if auth.stat().st_size and not auth.read_text(encoding="utf-8", errors="replace").endswith("\n"):
+                f.write("\n")
+            f.write(klucz + "\n")
+    try: os.chmod(auth, 0o600)
+    except OSError: pass
+
+    uzytkownik = (os.environ.get("USER") or os.environ.get("LOGNAME") or "").strip()
+    if not uzytkownik:
+        try:
+            import pwd
+            uzytkownik = pwd.getpwuid(os.getuid()).pw_name
+        except (ImportError, KeyError, OSError):
+            uzytkownik = ""
+
+    info = {
+        "user": uzytkownik,
+        "hostname": socket.gethostname(),
+        "local_ips": _lokalne_ipv4(),
+        "public_ip": _publiczne_ipv4(),
+        "port": 22,
+        "dodano_klucz": dodano,
+        "sshd_akcje": [],
+        "sshd_status": "",
+        "sshd_blad": "",
+        "sshd_port_wykryty": 22,
+    }
+    _zapewnij_sshd(info)
+    info["port"] = info["sshd_port_wykryty"]
+    return "PROMOCJA " + json.dumps(info, ensure_ascii=False)
+
+
 @polecenie("exec")
 def pol_exec(konfig, postep, args):
     if not args:
@@ -243,6 +736,7 @@ def wykonaj_polecenia(konfig, postep, polecenia):
         if cid in postep.wykonane:
             continue
         postep.wykonane.append(cid)
+        postep.aktualne_cid = cid
         try:
             funkcja = POLECENIA[p.get("polecenie")]
             ok, wynik = True, funkcja(konfig, postep, [str(a) for a in p.get("args", [])])
@@ -251,8 +745,10 @@ def wykonaj_polecenia(konfig, postep, polecenia):
         except (IndexError, ValueError, ZeroDivisionError) as e:
             ok = False
             wynik = str(e) if p.get("polecenie") == "makro" else f"błąd polecenia: {e!r}"
+        finally:
+            postep.aktualne_cid = None
         wynik = str(wynik)
-        if p.get("polecenie") != "makro":
+        if p.get("polecenie") not in ("makro", "wyslij", "pobierz"):
             wynik = wynik[:1000]
         postep.potwierdzenia.append({"id": cid, "rozgl": bool(p.get("rozgl")), "ok": ok, "wynik": wynik})
 
@@ -481,6 +977,9 @@ def uruchom(konfig, stop=None):
         if stan is None:
             return 0
         token = stan["token"]
+        postep.slave_id = stan["id"]
+        postep.token = token
+        postep.lacze = lacze
         while not stop.is_set():
             kod = krok_pracy(konfig, lacze, stan, token, postep, stop)
             if kod is not None:

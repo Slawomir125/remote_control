@@ -8,12 +8,20 @@ services:
       MASTER_PANEL_HOST: 0.0.0.0
       MASTER_PANEL_PORT: 8080
       MASTER_DATA_DIR: /data
+      # Publiczny endpoint do którego faktycznie dołączają slave'y. Ustaw gdy
+      # master siedzi za Cloudflare Tunnel / reverse proxy terminującym HTTPS:
+      MASTER_SLAVES_PUBLIC_PORT: 443
+      MASTER_SLAVES_PUBLIC_HTTPS: "1"
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:8080:8080"
     volumes:
       - master_data:/data
       - ./macros:/app/macros:ro
+      # Opcjonalnie: udostępnij klucz SSH z hosta i wspólny known_hosts.
+      # Odkomentuj gdy chcesz logować się kluczem zamiast hasłem:
+      # - ~/.ssh/id_ed25519:/data/keys/id_ed25519:ro
+      # - ~/.ssh/known_hosts:/data/known_hosts:rw
 
 volumes:
   master_data:

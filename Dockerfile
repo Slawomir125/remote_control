@@ -6,12 +6,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MASTER_PORT=9000 \
     MASTER_PANEL_HOST=0.0.0.0 \
     MASTER_PANEL_PORT=8080 \
-    MASTER_DATA_DIR=/data
+    MASTER_DATA_DIR=/data \
+    HOME=/home/master
 
 WORKDIR /app
 
-RUN groupadd --system master \
-    && useradd --system --gid master --home-dir /app --no-create-home master \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client sshpass \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system master \
+    && useradd --system --gid master --home-dir /home/master --create-home master \
+    && install -d -m 0700 -o master -g master /home/master/.ssh \
     && mkdir -p /data \
     && chown master:master /data
 

@@ -8,8 +8,8 @@ from master.config import AKTYWNY_DO_S, endpoint
 
 def _widok_slave(slave_id, slave, teraz):
     ostatnio_s = (teraz - slave.ostatnio) if slave.ostatnio else None
-    aktywny = ostatnio_s is not None and ostatnio_s < AKTYWNY_DO_S
-    polaczony = aktywny and not slave.pauza
+    polaczony = slave.sesja == "połączony"
+    aktywny = polaczony or (ostatnio_s is not None and ostatnio_s < AKTYWNY_DO_S)
     return {
         "id": slave_id,
         "typ": "slave",
@@ -18,7 +18,7 @@ def _widok_slave(slave_id, slave, teraz):
         "aktywny": aktywny,
         "polaczony": polaczony,
         "ostatnio_s": ostatnio_s,
-        "info": (slave.zadanie["tekst"] if slave.zadanie else ""),
+        "info": slave.sesja,
     }
 
 
@@ -41,7 +41,7 @@ def _widok_ssh(host, teraz):
     }
 
 
-@endpoint("/api/hosty-znane", chroniony=True)
+@endpoint("/api/hosty-znane")
 def ep_hosty_znane(stan, zapyt):
     teraz = time.time()
     with stan.lock:

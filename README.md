@@ -1,23 +1,26 @@
 # Master–Slave — system zdalnego sterowania
 
 Projekt implementuje rozproszoną architekturę Master–Slave do koordynowania
-pracy wielu klientów roboczych. Koordynator (Master) zarządza kolejką zadań,
-wydaje polecenia i udostępnia panel webowy. Klienci (Slaves) łączą się
-z Masterem, pobierają zadania, wykonują polecenia i odsyłają wyniki.
+pracy wielu klientów roboczych. Koordynator (Master) jest zawsze aktywny
+i nasłuchuje Slave'ów na stałym porcie TCP. Każdy Slave ma własną sesję —
+jak host SSH — którą admin otwiera i zamyka z panelu.
 
 ## Główne funkcje
 
 - **Modularny koordynator** — pakiet `master/` (11 modułów) z dekoratorowym
   systemem rejestracji endpointów, komend i typów pakietów.
-- **Panel Master Center** — interfejs przeglądarkowy z zakładkami Slaves i SSH,
-  terminalem poleceń, makrami, historią i KPI w czasie rzeczywistym.
+- **Panel Master Center** — interfejs przeglądarkowy bez logowania, z zakładkami
+  Slaves / SSH / Znane hosty, terminalem poleceń, makrami, historią i KPI
+  w czasie rzeczywistym.
+- **Sesje per Slave** — każdy Slave ma pole `sesja` (`rozłączony` / `łączenie`
+  / `połączony` / `błąd`), tak samo jak host SSH. Admin otwiera/zamyka sesję
+  pojedynczym przyciskiem w panelu lub komendą `polacz` / `rozlacz` w konsoli.
 - **SSH Remote Control** — zarządzanie sesjami SSH z poziomu panelu
   (ControlMaster, połączenia sesyjne, terminal SSH).
-- **Curl bootstrap** — uruchamianie slave'a jednym poleceniem:
-  `curl -s http://master:8080/join/<kod> | python3` — bez kopiowania plików
-  ani przepisywania tokenów.
 - **Makra z pełną składnią shella** — potoki, przekierowania, zmienne.
-- **Tokeny jednorazowe** — kody startowe z 10-minutowym wygaśnięciem.
+- **Transfer plików** — w terminalu panelu: `wyslij <ścieżka>` (file picker) i
+  `pobierz <ścieżka>` (auto-download), działa dla Slaves i SSH. Dla SSH streaming
+  przez istniejącą sesję ControlMaster; dla Slaves chunked HTTP ze sha256.
 - **SQLite z WAL** — trwałe przechowywanie wyników i historii.
 - **Docker** — `Dockerfile` + `compose.yaml` do konteneryzacji Mastera.
 
@@ -29,15 +32,15 @@ z Masterem, pobierają zadania, wykonują polecenia i odsyłają wyniki.
 │   ├── config.py            # stałe, ścieżki, rejestry, dekoratory
 │   ├── stan.py              # struktury danych (Stan, Slave, Polecenie)
 │   ├── baza.py              # SQLite, migracje, persystencja
-│   ├── logika.py            # rejestracja, polecenia, tokeny, makra
-│   ├── panel.py             # HTTP panel + endpointy API + /join/ bootstrap
-│   ├── serwer_slaves.py     # asyncio TCP serwer dla slave'ów
+│   ├── logika.py            # rejestracja, sesje per Slave, polecenia, makra
+│   ├── panel.py             # HTTP panel + endpointy API
+│   ├── serwer_slaves.py     # asyncio TCP serwer dla slave'ów + monitor sesji
 │   ├── ssh.py               # SSH ControlMaster — sesje i endpointy
 │   ├── konsola.py           # interaktywna konsola Mastera
 │   ├── widoki.py            # serializacja stanu do JSON (snapshoty)
 │   └── zadania.py           # ocena odpowiedzi, tempo, statystyki
 ├── master.py                # wrapper uruchamiający master/main.py
-├── master_center.html       # panel webowy (Slaves + SSH)
+├── master_center.html       # panel webowy (Slaves + SSH + Znane hosty)
 ├── slave.py                 # klient roboczy
 ├── slave/slave.py           # kopia slave.py
 ├── run_slaves.py            # uruchamianie wielu slave'ów (testy obciążeniowe)
@@ -58,27 +61,24 @@ docker compose up
 ```
 
 Master uruchomi:
-- serwer slave'ów na porcie 9000
-- panel webowy na http://127.0.0.1:8080
+- serwer slave'ów na porcie 9000 (zawsze aktywny — brak start/stop)
+- panel webowy na http://127.0.0.1:8080 (bez logowania)
 
 ### Klient roboczy
 
-**Szybki sposób** (curl bootstrap — nie wymaga pliku slave.py na maszynie):
-
-1. W panelu Master Center wygeneruj jednorazowy kod startowy
-2. Na zdalnej maszynie:
-```bash
-curl -s http://master:8080/join/<kod> | python3
-```
-
-**Tradycyjny sposób** (wymaga slave.py):
+W panelu w zakładce **Slaves**, sekcja „Dodaj Slave'a": podaj adres Master
+i opcjonalną nazwę — panel wygeneruje gotowe polecenie z tokenem rejestracji.
+Skopiuj je i uruchom na docelowej maszynie:
 
 ```bash
-python3 slave.py --master <adres> --token-rejestracji <token> --nazwa moj-slave
+python3 slave.py --master <adres> --token-rejestracji <token> --nazwa <nazwa>
 ```
 
 Slave obsługuje też zmienne środowiskowe: `SLAVE_MASTER`, `SLAVE_TOKEN`,
 `SLAVE_NAME`, `SLAVE_HTTPS`.
+
+Po rejestracji sesja Slave'a jest od razu `połączony`. Jeśli admin kliknie
+„Rozłącz" w panelu, kolejne polling'i dostają `503` aż ktoś kliknie „Połącz".
 
 ## SSH Remote Control
 
@@ -90,12 +90,33 @@ Zakładka SSH w panelu pozwala:
 
 SSH i sterowanie slave'ami to osobne, niezależne funkcjonalności.
 
+## Transfer plików
+
+Dostępny w terminalach obu zakładek (Slaves i SSH):
+
+```
+wyslij  /zdalna/sciezka    # otwiera file picker; wysyła wybrany plik do hosta
+pobierz /zdalna/sciezka    # pobiera plik z hosta i zapisuje przez przeglądarkę
+```
+
+Działanie zależy od zakładki:
+
+- **Zakładka SSH** — streaming przez istniejącą sesję ControlMaster
+  (`cat`-piping, 8-bit clean, bez tempfile). Wymaga aktywnej sesji
+  (`Połącz` najpierw). Prędkość jak natywne `scp`.
+- **Zakładka Slaves** — chunked HTTP przez dedykowane endpointy `/plik/*`
+  (3 MiB chunki, raw bajty, sha256 kontrolny). Osobny kanał od pollingowego
+  `/api/slave/<id>` — pokazuje dydaktycznie, że beacony często otwierają
+  side-channel na duże transfery.
+
+Limit domyślny: 1 GiB per plik (zmiana przez `MASTER_PLIKI_MAX_MB`).
+
 ## Bezpieczeństwo
 
-- Panel chroniony tokenem (plik `master_panel_token.txt`).
 - Slave'y autoryzowane tokenami bearer po rejestracji.
-- Tokeny jednorazowe wygasają po 10 minutach i działają tylko raz.
-- Nie wystawiaj panelu publicznie — używaj tunelu SSH.
+- Token rejestracji w pliku `master_registration_token.txt` (lub env var
+  `MASTER_REGISTRATION_TOKEN`) — Slave podaje go przy pierwszym pakiecie.
+- Panel nie wymaga logowania — nie wystawiaj go publicznie, używaj tunelu SSH.
 - `.gitignore` wyklucza bazy, tokeny, klucze i pliki stanu.
 
 Więcej szczegółów w [ARCHITECTURE.md](./ARCHITECTURE.md).

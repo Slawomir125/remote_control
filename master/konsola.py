@@ -1,30 +1,26 @@
 """Konsola interaktywna Master."""
 
+import sys
+import threading
+
 from master.config import (
     PANEL_PORT, MACRO_DIR, POLECENIA_SLAVES, OPISY_KOMEND, KOMENDY, KONIEC,
     komenda,
 )
 from master.stan import log
 from master.logika import (
-    uruchom_master, wstrzymaj_master, wydaj_polecenie, wczytaj_makro,
+    polacz_slave, rozlacz_slave, wydaj_polecenie, wczytaj_makro,
+    znajdz_slaves,
 )
 from master.widoki import tabela_slaves, tabela_polecen
 from master.baza import info_bazy
 
 
-@komenda("start", "Master zaczyna odpowiadać Slaves (do tej pory: cisza)")
-def k_start(stan, arg):
-    uruchom_master(stan)
-
-
-@komenda("stop", "Master znów ignoruje wszystkich (Slaves czekają i ponawiają)")
-def k_stop(stan, arg):
-    wstrzymaj_master(stan)
-
-
 @komenda("status", "podsumowanie")
 def k_status(stan, arg):
-    return (f"Praca: {'TAK' if stan.pracuje else 'NIE'} | Slaves: {len(stan.slaves)} | "
+    with stan.lock:
+        aktywne = sum(1 for s in stan.slaves.values() if s.sesja == "połączony")
+    return (f"Slaves: {len(stan.slaves)} (sesje połączone: {aktywne}) | "
             f"połączeń: {stan.polaczenia} | rozwiązane: {stan.dobre_razem + stan.zle_razem} "
             f"(dobre: {stan.dobre_razem}, błędne: {stan.zle_razem}) | "
             f"podgląd zadań: {'ON' if stan.log_wlaczony else 'OFF'} | "
@@ -53,13 +49,13 @@ def k_slaves(stan, arg):
     return tabela_slaves(stan, ile)
 
 
-@komenda("polec", "polec <id|nazwa|wszystkie> <polecenie> [arg...] - wyślij polecenie Slavesi (lub wszystkim)")
+@komenda("polec", "polec <id|nazwa> <polecenie> [arg...] - wyślij polecenie do jednego Slave'a")
 def k_polec(stan, arg):
     czesci = arg.split()
     if len(czesci) < 2:
         opisy = "\n".join(f"    {n:<11} {o}" for n, o in POLECENIA_SLAVES.items())
-        return ("Użycie: polec <id|wszystkie> <program|polecenie> [argumenty]\n"
-                "  np.  polec 3 ls -la   |   polec wszystkie pauza   |   polec 12 status\n"
+        return ("Użycie: polec <id|nazwa> <program|polecenie> [argumenty]\n"
+                "  np.  polec 3 ls -la   |   polec slave-1 pauza   |   polec 12 status\n"
                 f"  Polecenia:\n{opisy}")
     nazwa = czesci[1].lower()
     args = czesci[2:]
@@ -70,13 +66,34 @@ def k_polec(stan, arg):
         p = wydaj_polecenie(stan, czesci[0], nazwa, args)
     except ValueError as e:
         return f"Błąd: {e}"
-    return (f"Polecenie #{p.id} '{p.nazwa}' w kolejce | adresatów: {p.adresaci} | "
+    return (f"Polecenie #{p.id} '{p.nazwa}' w kolejce dla #{p.cel} | "
             f"Slave odbiera je przy najbliższym kontakcie. Wyniki: komenda 'polecenia'.")
 
 
-@komenda("wszystkim", "wszystkim <polecenie> [arg...] - skrót: polecenie dla wszystkich Slaves")
-def k_wszystkim(stan, arg):
-    return k_polec(stan, "wszystkie " + arg)
+@komenda("polacz", "polacz <id|nazwa> - otwórz sesję z wybranym Slave'em")
+def k_polacz(stan, arg):
+    if not arg.strip():
+        return "Użycie: polacz <id|nazwa>"
+    try:
+        with stan.lock:
+            slave_id = znajdz_slaves(stan, arg.strip())
+        polacz_slave(stan, slave_id)
+    except ValueError as e:
+        return f"Błąd: {e}"
+    return f"Sesja Slave #{slave_id} otwarta (łączenie)."
+
+
+@komenda("rozlacz", "rozlacz <id|nazwa> - zamknij sesję z wybranym Slave'em")
+def k_rozlacz(stan, arg):
+    if not arg.strip():
+        return "Użycie: rozlacz <id|nazwa>"
+    try:
+        with stan.lock:
+            slave_id = znajdz_slaves(stan, arg.strip())
+        rozlacz_slave(stan, slave_id)
+    except ValueError as e:
+        return f"Błąd: {e}"
+    return f"Sesja Slave #{slave_id} zamknięta."
 
 
 @komenda("polecenia", "ostatnie polecenia: do ilu dotarło, ile potwierdziło, przykładowy wynik")
@@ -90,16 +107,16 @@ def k_macros(stan, arg):
     return "Dostępne macros: " + (", ".join(nazwy) if nazwy else "brak plików .sh w katalogu macros/")
 
 
-@komenda("makro", "makro <id|nazwa|wszystkie> <nazwa.sh> - uruchom stos poleceń z pliku")
+@komenda("makro", "makro <id|nazwa> <nazwa.sh> - uruchom stos poleceń z pliku dla jednego Slave'a")
 def k_makro(stan, arg):
     czesci = arg.split()
     if len(czesci) != 2:
-        return "Użycie: makro <id|nazwa|wszystkie> <nazwa.sh>"
+        return "Użycie: makro <id|nazwa> <nazwa.sh>"
     try:
         p = wydaj_polecenie(stan, czesci[0], "makro", wczytaj_makro(czesci[1]))
     except ValueError as e:
         return f"Błąd: {e}"
-    return (f"Makro #{p.id} w kolejce | adresatów: {p.adresaci} | "
+    return (f"Makro #{p.id} w kolejce dla #{p.cel} | "
             "wyniki pojawią się w terminalu panelu lub komendzie 'polecenia'.")
 
 
@@ -126,7 +143,20 @@ def k_wyjdz(stan, arg):
 
 
 def konsola(stan):
-    print("Master gotowy. Wpisz 'pomoc'. Dopóki nie wpiszesz 'start' - ignoruję Slaves.")
+    # Bez TTY (np. docker compose up bez `tty: true`) input() natychmiast rzuca
+    # EOFError, konsola kończy się, main() wychodzi, Docker restartuje kontener
+    # i pętla trwa. W tym trybie trzymamy wątek main żywy, serwery HTTP/asyncio
+    # pracują w tle do SIGTERM/SIGINT.
+    if not sys.stdin.isatty():
+        print("Master gotowy (tryb nieinteraktywny — brak TTY). "
+              "Panel i serwer slave'ów pracują; wyślij SIGTERM aby zatrzymać.")
+        try:
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            return
+        return
+
+    print("Master gotowy. Wpisz 'pomoc'. Nasłuchiwanie Slaves jest zawsze włączone.")
     while True:
         try:
             linia = input("master> ").strip()

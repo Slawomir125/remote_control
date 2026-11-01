@@ -3,7 +3,7 @@
 import threading
 
 from master.config import (
-    KATALOG_DANYCH, HOST, PORT, PANEL_HOST, PANEL_PORT, PLIK_TOKENU,
+    KATALOG_DANYCH, HOST, PORT, PANEL_HOST, PANEL_PORT,
 )
 from master.stan import log
 from master.baza import utworz_stan, start_pisarza, zamknij_pisarza, info_bazy
@@ -32,7 +32,6 @@ def main():
     try:
         panel = uruchom_w_tle(SerwerPanelu((PANEL_HOST, PANEL_PORT), Panel), stan)
         log(stan, f"Master Center: http://127.0.0.1:{PANEL_PORT} (zdalnie użyj tunelu SSH)", True)
-        log(stan, f"Token sterowania panelu: {stan.token_panelu}  (plik {PLIK_TOKENU.name})", True)
     except OSError as e:
         log(stan, f"! Master Center nie wystartował (port {PANEL_PORT}: {e})", True)
     log(stan, f"Slave HTTP origin: {HOST}:{PORT} | zarejestrowanych: {len(stan.slaves)} | "

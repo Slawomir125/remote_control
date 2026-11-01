@@ -9,10 +9,11 @@ import urllib.parse
 from collections import Counter
 
 from master.config import (
-    HOST, PORT, MAX_LINIA, BACKLOG, CISZA_ROZLACZ_S, RAPORT_CO_S, typ_pakietu,
+    HOST, PORT, MAX_LINIA, BACKLOG, CISZA_ROZLACZ_S, RAPORT_CO_S, AKTYWNY_DO_S,
+    PLIKI_MAX_B, typ_pakietu,
 )
 from master.stan import log
-from master.logika import zarejestruj, przetworz_prace, odrzuc, token_jednorazowy_zuzyj
+from master.logika import zarejestruj, przetworz_prace, odrzuc, SESJA_ROZLACZONA
 
 
 # ─── obsługa pakietów od Slave'ów ───────────────────────────────────────────
@@ -33,13 +34,26 @@ def token_rowny(a, b):
     return hmac.compare_digest(str(a).encode("utf-8"), str(b).encode("utf-8"))
 
 
+def _autoryzuj_slave(stan, authorization, slave_id):
+    """Zwraca (slave, kod_bledu, komunikat). slave=None gdy błąd."""
+    token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else ""
+    with stan.lock:
+        slave = stan.slaves.get(slave_id)
+        if slave is None:
+            odrzuc(stan, "nieznane ID")
+            return None, 401, "nieznany Slave"
+        if not token_rowny(token, slave.token):
+            odrzuc(stan, "zły token Slaves")
+            slave.sesja = "błąd"
+            return None, 401, "nieprawidłowy token Slaves"
+    return slave, 200, "OK"
+
+
 def obsluz_zadanie_http(stan, sciezka, authorization, dane):
     """Obsługuje endpointy rejestracji i pracy; TLS zapewnia Cloudflare Tunnel/proxy."""
     token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else ""
     if sciezka == "/api/slave/register":
         if token_rowny(token, stan.token_rejestracji):
-            return 200, pakiet_rejestracja(stan, "0", dane)
-        if token and token_jednorazowy_zuzyj(stan, token):
             return 200, pakiet_rejestracja(stan, "0", dane)
         return 401, {"blad": "nieprawidłowy token rejestracji"}
 
@@ -47,19 +61,97 @@ def obsluz_zadanie_http(stan, sciezka, authorization, dane):
     if not sciezka.startswith(prefix):
         return 404, {"blad": "nie znaleziono"}
     slave_id = urllib.parse.unquote(sciezka[len(prefix):]).strip()
-    with stan.lock:
-        slave = stan.slaves.get(slave_id)
-        if slave is None:
-            odrzuc(stan, "nieznane ID")
-            return 401, {"blad": "nieznany Slave"}
-        if not token_rowny(token, slave.token):
-            odrzuc(stan, "zły token Slaves")
-            return 401, {"blad": "nieprawidłowy token Slaves"}
-        if not stan.pracuje:
-            return 503, {"blad": "Master wstrzymany"}
+    slave, kod, msg = _autoryzuj_slave(stan, authorization, slave_id)
+    if slave is None:
+        return kod, {"blad": msg}
     if not isinstance(dane, dict) or dane.get("typ") != "praca":
         return 400, {"blad": "nieprawidłowy pakiet pracy"}
-    return 200, pakiet_praca(stan, slave_id, dane)
+    wynik = pakiet_praca(stan, slave_id, dane)
+    if wynik is SESJA_ROZLACZONA:
+        return 503, {"blad": "sesja rozłączona przez admina"}
+    return 200, wynik
+
+
+# ─── transfer plików: handler asyncio ───────────────────────────────────────
+
+def _plik_pobierz_chunk(stan, pol_id, off, limit):
+    """Zwraca (bajty, total, kod_bledu, komunikat). bajty=b'' gdy koniec."""
+    with stan.lock:
+        wpis = stan.pliki_do_slave.get(pol_id)
+    if wpis is None:
+        return b"", 0, 404, "brak pliku do pobrania dla tego polecenia"
+    dane = wpis["bytes"]
+    total = len(dane)
+    if off < 0 or off > total:
+        return b"", total, 416, "off poza zakresem"
+    koniec = min(total, off + max(1, min(limit, MAX_LINIA)))
+    return dane[off:koniec], total, 200, "OK"
+
+
+def _plik_wyslij_chunk(stan, pol_id, slave_id, off, final, chunk):
+    """Akumuluje chunk w pliki_od_slave[pol_id]. Zwraca (kod_http, dict)."""
+    with stan.lock:
+        wpis = stan.pliki_od_slave.get(pol_id)
+        if wpis is None:
+            # Lazy init — operator jeszcze nie zarejestrował oczekiwania; dopuszczamy
+            # żeby slave zdążył zacząć wysyłać zanim panel pingnie.
+            wpis = {"buf": bytearray(), "final": False,
+                    "event": threading.Event(), "slave_id": slave_id}
+            stan.pliki_od_slave[pol_id] = wpis
+        if wpis["slave_id"] != slave_id:
+            return 403, {"blad": "ten plik oczekuje od innego slave'a"}
+        if off != len(wpis["buf"]):
+            return 409, {"blad": f"zły offset: oczekiwany {len(wpis['buf'])}, otrzymany {off}"}
+        if len(wpis["buf"]) + len(chunk) > PLIKI_MAX_B:
+            return 413, {"blad": "plik przekracza PLIKI_MAX_B"}
+        wpis["buf"].extend(chunk)
+        if final:
+            wpis["final"] = True
+            wpis["event"].set()
+    return 200, {"ok": True, "odebrano": len(wpis["buf"])}
+
+
+async def _obsluz_plik(stan, reader, writer, method, target, naglowki):
+    """GET /plik/pobierz?pol=X&off=Y&limit=Z  albo  POST /plik/wyslij?pol=X&off=Y&final=0|1."""
+    parts = urllib.parse.urlsplit(target)
+    params = urllib.parse.parse_qs(parts.query)
+    sciezka = parts.path
+
+    slave_id = (params.get("slave", [""])[0] or "").strip()
+    slave, kod, msg = _autoryzuj_slave(stan, naglowki.get("authorization", ""), slave_id)
+    if slave is None:
+        return kod, {"blad": msg}, b"", False
+    try:
+        pol_id = int(params.get("pol", ["0"])[0])
+    except (TypeError, ValueError):
+        return 400, {"blad": "brak lub zły pol_id"}, b"", False
+
+    if sciezka == "/plik/pobierz" and method == "GET":
+        try:
+            off = int(params.get("off", ["0"])[0])
+            limit = int(params.get("limit", [str(MAX_LINIA)])[0])
+        except (TypeError, ValueError):
+            return 400, {"blad": "zły off/limit"}, b"", False
+        bajty, total, kod, msg = _plik_pobierz_chunk(stan, pol_id, off, limit)
+        if kod != 200:
+            return kod, {"blad": msg}, b"", False
+        # Zwracam surowe bajty + nagłówki total/koniec via naglowki własne.
+        return 200, None, bajty, True   # True = raw body (nie JSON)
+
+    if sciezka == "/plik/wyslij" and method == "POST":
+        try:
+            off = int(params.get("off", ["0"])[0])
+            final = params.get("final", ["0"])[0] in ("1", "true", "True")
+        except (TypeError, ValueError):
+            return 400, {"blad": "zły off/final"}, b"", False
+        dl = int(naglowki.get("content-length", "0"))
+        if dl < 0 or dl > MAX_LINIA:
+            return 413, {"blad": "zły content-length"}, b"", False
+        chunk = await asyncio.wait_for(reader.readexactly(dl), CISZA_ROZLACZ_S) if dl else b""
+        kod, odp = _plik_wyslij_chunk(stan, pol_id, slave_id, off, final, chunk)
+        return kod, odp, b"", False
+
+    return 404, {"blad": "nie znaleziono"}, b"", False
 
 
 # ─── serwer asyncio ─────────────────────────────────────────────────────────
@@ -67,6 +159,8 @@ def obsluz_zadanie_http(stan, sciezka, authorization, dane):
 async def obsluz_polaczenie(stan, reader, writer):
     stan.polaczenia += 1
     status, response = 400, {"blad": "nieprawidłowe żądanie"}
+    raw_body = b""
+    raw_body_flag = False
     try:
         request_line = await asyncio.wait_for(reader.readline(), CISZA_ROZLACZ_S)
         method, target, _ = request_line.decode("ascii").strip().split(" ", 2)
@@ -84,7 +178,12 @@ async def obsluz_polaczenie(stan, reader, writer):
             if separator:
                 naglowki[key.strip().lower()] = value.strip()
         if status == 400:
-            if method != "POST":
+            sciezka = urllib.parse.urlsplit(target).path
+            if sciezka.startswith("/plik/"):
+                # Dedykowany kanał binarny.
+                status, response, raw_body, raw_body_flag = await _obsluz_plik(
+                    stan, reader, writer, method, target, naglowki)
+            elif method != "POST":
                 status, response = 405, {"blad": "wymagana metoda POST"}
             elif naglowki.get("transfer-encoding", "").lower() == "chunked":
                 status, response = 400, {"blad": "chunked nieobsługiwany"}
@@ -99,7 +198,7 @@ async def obsluz_polaczenie(stan, reader, writer):
                         status, response = 400, {"blad": "oczekiwano obiektu JSON"}
                     else:
                         status, response = obsluz_zadanie_http(
-                            stan, urllib.parse.urlsplit(target).path,
+                            stan, sciezka,
                             naglowki.get("authorization", ""), dane,
                         )
     except (asyncio.TimeoutError, asyncio.IncompleteReadError, UnicodeError, ValueError, json.JSONDecodeError):
@@ -112,14 +211,20 @@ async def obsluz_polaczenie(stan, reader, writer):
     finally:
         stan.polaczenia -= 1
         try:
-            body = json.dumps(response, ensure_ascii=False).encode("utf-8")
-            reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found",
-                      405: "Method Not Allowed", 413: "Payload Too Large",
+            if raw_body_flag:
+                body = raw_body
+                content_type = b"application/octet-stream"
+            else:
+                body = json.dumps(response, ensure_ascii=False).encode("utf-8")
+                content_type = b"application/json; charset=utf-8"
+            reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
+                      404: "Not Found", 405: "Method Not Allowed", 409: "Conflict",
+                      413: "Payload Too Large", 416: "Range Not Satisfiable",
                       431: "Request Header Fields Too Large",
                       500: "Internal Server Error",
                       503: "Service Unavailable"}.get(status, "Error")
             writer.write(f"HTTP/1.1 {status} {reason}\r\n".encode("ascii"))
-            writer.write(b"Content-Type: application/json; charset=utf-8\r\n")
+            writer.write(b"Content-Type: " + content_type + b"\r\n")
             writer.write(f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode("ascii"))
             writer.write(body)
             await writer.drain()
@@ -187,13 +292,19 @@ def podnies_limit_plikow():
 
 
 def raporter(stan):
-    """Co RAPORT_CO_S zbiera rejestracje i odrzucone pakiety w jedną linię."""
+    """Co RAPORT_CO_S: zbiera rejestracje, odrzucone pakiety i monitoruje sesje Slaves."""
     while True:
         time.sleep(RAPORT_CO_S)
+        teraz = time.time()
         with stan.lock:
             nowi, stan.nowi = stan.nowi, []
             odrzucone, stan.odrzucone = stan.odrzucone, Counter()
             razem = len(stan.slaves)
+            # Slave bez kontaktu > AKTYWNY_DO_S z otwartą sesją → łączenie
+            for slave in stan.slaves.values():
+                if slave.sesja == "połączony" and slave.ostatnio is not None \
+                        and teraz - slave.ostatnio > AKTYWNY_DO_S:
+                    slave.sesja = "łączenie"
         if 0 < len(nowi) <= 5:
             for slave_id, nazwa in nowi:
                 log(stan, f"+ #{slave_id} {nazwa} zarejestrowany", True)

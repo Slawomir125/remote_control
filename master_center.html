@@ -45,13 +45,11 @@ td.r,th.r{text-align:right}
 .empty{color:var(--mut);padding:18px 8px;text-align:center}
 .bar{display:inline-block;vertical-align:middle;width:70px;height:6px;border-radius:3px;background:#1d2538;margin-left:8px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--ok)}
-/* sterowanie */
 .frm{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
 .frm label{display:flex;align-items:center;gap:6px;color:var(--txt)}
 input[type=text],input[type=password],select{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:6px 10px;font:inherit;min-width:0}
 input[type=text]:focus,input[type=password]:focus,select:focus{outline:none;border-color:var(--yel)}
 input:disabled{opacity:.45}
-#token{flex:1;min-width:200px;font-family:var(--mono)}
 #term-target{width:150px}
 #term-command{width:100%;background:transparent;border:0;color:var(--txt);font:inherit;font-family:var(--mono);padding:7px 4px}
 #term-command:focus{outline:none}
@@ -80,7 +78,6 @@ button:disabled{opacity:.5;cursor:default}
 .term-entry{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:6px 8px;border-top:1px solid #1c2a20}
 .term-prompt{font:12px var(--mono);color:var(--ok);white-space:nowrap}
 .term-entry button{white-space:nowrap}
-/* feed */
 #feed{height:640px;overflow-y:auto;font-family:var(--mono);font-size:12.5px}
 .row{display:grid;grid-template-columns:62px 118px 1fr auto 56px;gap:8px;padding:4px 6px;border-bottom:1px solid #1a2132;align-items:baseline}
 .row .t{color:var(--mut)}
@@ -93,7 +90,6 @@ button:disabled{opacity:.5;cursor:default}
 .row.sys{grid-template-columns:62px 1fr;color:var(--yel);background:#1a1708}
 .new{animation:fl .9s ease-out}
 @keyframes fl{from{background:#2b3550}to{background:transparent}}
-/* okno historii */
 #overlay{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;padding:20px;z-index:10}
 #modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;max-width:760px;width:100%;max-height:88vh;overflow:auto;padding:18px 20px}
 #modal h3{margin:0 0 4px;font-size:18px}
@@ -102,20 +98,17 @@ button:disabled{opacity:.5;cursor:default}
 .stats b{display:block;font-size:18px}
 .stats span{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 #conn{display:none;background:#2a1118;color:var(--bad);text-align:center;padding:6px;font-size:13px;border-bottom:1px solid #6b2331}
-/* tabs */
 .tabs{display:flex;gap:0;padding:0 22px;border-bottom:1px solid var(--line);background:var(--bg)}
 .tab-btn{background:none;border:none;border-bottom:2px solid transparent;color:var(--mut);padding:10px 18px;font:inherit;font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
 .tab-btn:hover{color:var(--txt)}
 .tab-btn.active{color:var(--yel);border-bottom-color:var(--yel)}
 .tab-pane{display:none}
 .tab-pane.active{display:block}
-/* ssh */
 #ssh-output{height:280px;overflow-y:auto;padding:10px 12px;color:#c4d1c7;font:12.5px/1.55 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 td button{font-size:12px;padding:3px 8px;margin:0 2px}
 .badge.conn{color:var(--ok);background:#10281f}
 .badge.disc{color:var(--mut);background:#1d2538}
 .badge.wait{color:var(--yel);background:#2a2410}
-/* hosty znane */
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
 .dot.on{background:var(--ok)} .dot.off{background:#555}
 .sortbar{display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
@@ -124,6 +117,8 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
 .tag{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;letter-spacing:.04em;text-transform:uppercase}
 .tag.ssh{color:var(--blue);background:#0f1d2e}
 .tag.slave{color:var(--yel);background:#2a2410}
+.cli{display:flex;gap:6px;align-items:center;margin:6px 0}
+.cli input{flex:1;background:#070b09;color:#7fefad;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:13px}
 </style>
 </head>
 <body>
@@ -132,7 +127,7 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
   <div class="logo">MASTER CENTER<small>centrum dowodzenia Slaves</small></div>
   <div class="sp"></div>
   <div class="up" id="uptime">uptime –</div>
-  <div class="pill off" id="status">ŁĄCZENIE…</div>
+  <div class="pill on" id="status">PRACUJE</div>
 </header>
 <nav class="tabs">
   <button class="tab-btn active" data-tab="slaves" onclick="switchTab('slaves')">Slaves</button>
@@ -143,7 +138,7 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
 <main>
 <div id="tab-slaves" class="tab-pane active">
   <section class="kpis">
-    <div class="card kpi"><div class="l">Slaves aktywne</div><div class="v" id="k-akt">–</div><div class="s" id="k-akt-s">&nbsp;</div></div>
+    <div class="card kpi"><div class="l">Sesje połączone</div><div class="v" id="k-akt">–</div><div class="s" id="k-akt-s">&nbsp;</div></div>
     <div class="card kpi"><div class="l">Zadania rozwiązane</div><div class="v" id="k-zad">–</div><div class="s" id="k-zad-s">&nbsp;</div></div>
     <div class="card kpi"><div class="l">Skuteczność</div><div class="v" id="k-skut">–</div><div class="s" id="k-skut-s">&nbsp;</div></div>
     <div class="card kpi"><div class="l">Tempo</div><div class="v" id="k-tempo">–</div><div class="s">średnia z ostatnich 10 s</div></div>
@@ -157,51 +152,28 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
         <canvas id="wykres"></canvas>
       </section>
 
+      <section class="card">
+        <h2>Slaves <span class="n mut">(sesje per slave — tak jak w zakładce SSH)</span></h2>
+        <div class="tw">
+          <table>
+            <thead><tr>
+              <th>#</th><th>Nazwa</th><th>Sesja</th>
+              <th class="r">OK</th><th class="r">Błędy</th>
+              <th class="r">Ostatnio</th><th>Zadanie w toku</th><th>Akcje</th>
+            </tr></thead>
+            <tbody id="slaves-tbody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="slaves-pusto">Brak zarejestrowanych Slaves. Zobacz instrukcję „Dodaj Slave'a" poniżej.</div>
+      </section>
+
       <section class="card" id="sterowanie">
-        <h2>Sterowanie <span class="n mut">(token z konsoli Master / pliku master_panel_token.txt; zdalnie łącz się przez SSH)</span></h2>
-        <div class="frm">
-          <input id="token" type="password" placeholder="token panelu" autocomplete="off">
-        </div>
-
-        <div class="btns">
-          <button class="ok" id="b-start" title="Master zaczyna odpowiadać Slaves">▶ START Master</button>
-          <button class="bad" id="b-stop" title="Master przestaje odpowiadać; Slaves czekają i ponawiają">■ STOP Master</button>
-          <span class="gap"></span>
-          <button id="b-pauza" title="Wszystkie Slaves wstrzymują pobieranie zadań">⏸ Pauza wszystkim</button>
-          <button id="b-wznow" title="Wszystkie Slaves wracają do pracy">▶ Wznów wszystkim</button>
-          <button class="bad" id="b-koniec" title="Wszystkie Slaves kończą pracę (same się nie uruchomią)">⏹ Zakończ wszystkich</button>
-        </div>
-
-        <div class="card" id="start-slave" style="margin-bottom:12px;background:var(--panel2)">
-          <h2>Jednorazowy kod startowy <span class="n mut">(token działa jeden raz, wygasa po 10 min)</span></h2>
-          <div class="frm">
-            <input id="start-domena" type="text" placeholder="domena Master, np. master.example.com" autocomplete="off" style="flex:1;min-width:220px">
-            <input id="start-nazwa" type="text" placeholder="nazwa Slave (opcjonalnie)" autocomplete="off" style="width:200px">
-            <label><input id="start-https" type="checkbox" checked> HTTPS</label>
-            <button class="prim" id="b-start-slave">Wygeneruj polecenie</button>
-          </div>
-          <div class="hint" id="start-slave-hint">&nbsp;</div>
-          <div id="start-curl-box" style="display:none;margin-bottom:8px">
-            <label style="font-size:11px;color:var(--mut);margin-bottom:2px;display:block">Szybki start (curl):</label>
-            <div style="display:flex;gap:6px;align-items:center">
-              <input id="start-curl-cmd" readonly style="flex:1;background:#070b09;color:#7fefad;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:14px">
-              <button id="b-start-curl-copy" style="white-space:nowrap">Kopiuj</button>
-            </div>
-          </div>
-          <details id="start-long-box" style="display:none">
-            <summary style="cursor:pointer;font-size:11px;color:var(--mut)">Alternatywnie (jeśli slave.py jest na maszynie):</summary>
-            <textarea id="start-slave-cmd" readonly rows="2" style="width:100%;resize:vertical;background:#070b09;color:#b5edc5;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:12.5px;margin-top:4px"></textarea>
-            <div class="btns" style="margin-top:4px;margin-bottom:0">
-              <button id="b-start-slave-copy">Kopiuj polecenie</button>
-            </div>
-          </details>
-        </div>
-
+        <h2>Terminal Slaves</h2>
         <div class="terminal" aria-label="Bezpieczny terminal Slaves">
           <div class="term-head">
             <strong>SLAVE TERMINAL</strong>
             <label for="term-target">Cel</label>
-            <input id="term-target" type="text" placeholder="ID, zakres (1-12) lub *" autocomplete="off">
+            <input id="term-target" type="text" placeholder="ID, nazwa lub zakres (1-12)" autocomplete="off">
             <label for="term-macro">Makro</label>
             <select id="term-macro" aria-label="Wybierz makro"><option value="">pliki .sh</option></select>
             <button id="b-hist" title="Historia zadań wybranego Slaves z bazy">Historia</button>
@@ -213,11 +185,25 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
           </div>
           <div class="term-entry">
             <span class="term-prompt" id="term-prompt">master@slave:~$</span>
-            <input id="term-command" type="text" placeholder="pwd lub makro nazwa" autocomplete="off" spellcheck="false" aria-label="Komenda terminala">
+            <input id="term-command" type="text" placeholder="pwd; makro nazwa; wyslij /tmp/x.bin; pobierz /etc/hostname" autocomplete="off" spellcheck="false" aria-label="Komenda terminala">
             <button class="prim" id="b-term-send" title="Wyślij komendę do wskazanego Slaves">Wyślij</button>
           </div>
         </div>
         <div class="wynik" id="wynik"></div>
+      </section>
+
+      <section class="card" id="dodaj-slave" style="background:var(--panel2)">
+        <h2>Dodaj Slave'a <span class="n mut">(uruchom slave.py na docelowej maszynie)</span></h2>
+        <div class="frm">
+          <input id="add-master" type="text" placeholder="adres Master, np. 127.0.0.1 lub master.example.com" style="flex:1;min-width:220px">
+          <input id="add-nazwa" type="text" placeholder="nazwa Slave (opcjonalnie)" style="width:220px">
+          <button class="prim" id="b-add-build">Wygeneruj polecenie</button>
+        </div>
+        <div class="hint" id="add-hint">Token rejestracji jest wczytywany automatycznie z Mastera.</div>
+        <div class="cli">
+          <input id="add-cmd" readonly placeholder="python3 slave.py --master …">
+          <button id="b-add-copy">Kopiuj</button>
+        </div>
       </section>
 
       <section class="card">
@@ -231,7 +217,7 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
             <tbody id="polecenia"></tbody>
           </table>
         </div>
-        <div class="empty" id="polecenia-pusto">Brak poleceń. Wyślij pierwsze kartą „Sterowanie”.</div>
+        <div class="empty" id="polecenia-pusto">Brak poleceń. Wyślij pierwsze przez terminal powyżej.</div>
       </section>
     </div>
 
@@ -269,13 +255,14 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
       </section>
 
       <section class="card" style="background:var(--panel2)">
-        <h2>Dodaj host SSH <span class="n mut">(klucz SSH Master musi być w authorized_keys na hoście)</span></h2>
+        <h2>Dodaj host SSH <span class="n mut">(klucz w authorized_keys <b>lub</b> hasło — zostaw puste pola jeśli używasz domyślnego klucza)</span></h2>
         <div class="frm">
           <input id="ssh-nazwa" type="text" placeholder="nazwa (np. web-1)" style="width:130px" autocomplete="off">
           <input id="ssh-host" type="text" placeholder="IP lub domena" style="flex:1;min-width:160px" autocomplete="off">
           <input id="ssh-port" type="text" placeholder="22" style="width:60px" autocomplete="off">
           <input id="ssh-user" type="text" placeholder="użytkownik" style="width:120px" autocomplete="off">
           <input id="ssh-klucz" type="text" placeholder="ścieżka do klucza (opcja)" style="flex:1;min-width:160px" autocomplete="off">
+          <input id="ssh-haslo" type="password" placeholder="hasło (opcja)" style="width:140px" autocomplete="new-password">
           <button class="prim" id="b-ssh-dodaj">Dodaj</button>
         </div>
         <div class="hint" id="ssh-hint">&nbsp;</div>
@@ -295,7 +282,7 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
           </div>
           <div class="term-entry">
             <span class="term-prompt">ssh$</span>
-            <input id="ssh-command" type="text" placeholder="np. uptime, df -h, cat /etc/hostname" autocomplete="off" spellcheck="false">
+            <input id="ssh-command" type="text" placeholder="np. uptime; wyslij /tmp/zdalny.bin; pobierz /etc/hostname" autocomplete="off" spellcheck="false">
             <button class="prim" id="b-ssh-send">Wyślij</button>
           </div>
         </div>
@@ -312,8 +299,8 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
 <div id="tab-hosty" class="tab-pane">
   <section class="kpis" style="margin-bottom:14px">
     <div class="card kpi"><div class="l">Hosty znane</div><div class="v" id="hz-k-razem">0</div><div class="s" id="hz-k-razem-s">&nbsp;</div></div>
-    <div class="card kpi"><div class="l">Aktywne</div><div class="v" id="hz-k-akt">0</div><div class="s">ostatni kontakt &lt; 15 s</div></div>
-    <div class="card kpi"><div class="l">Połączone</div><div class="v" id="hz-k-pol">0</div><div class="s">SSH: sesja żyje · Slave: nie wstrzymany</div></div>
+    <div class="card kpi"><div class="l">Aktywne</div><div class="v" id="hz-k-akt">0</div><div class="s">kontakt lub otwarta sesja</div></div>
+    <div class="card kpi"><div class="l">Połączone</div><div class="v" id="hz-k-pol">0</div><div class="s">sesja = połączony</div></div>
   </section>
 
   <section class="card">
@@ -354,8 +341,9 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 
 let since = 0, paused = false, bufor = [], inflight = false, bledy = 0;
 const terminalPending = new Map();
-const terminalHistory = new Map([['all', ['Wpisz help, aby zobaczyć dozwolone komendy.']]]);
+const terminalHistory = new Map();
 let activeConsole = 'none', slavesInFlight = false, slavesCatalog = [];
+let meta = {token_rejestracji: '', port_slaves: 9000, https_slaves: false};
 
 function zapiszTerminal(tekst, klasa, consoleKey = activeConsole) {
   if (!terminalHistory.has(consoleKey)) terminalHistory.set(consoleKey, []);
@@ -378,7 +366,6 @@ function renderTerminal(consoleKey = activeConsole) {
 function konsolaDlaCelu(cel) {
   const target = cel.trim(), normalized = target.toLowerCase();
   if (!target) return 'none';
-  if (['*', 'all', 'wszyscy', 'wszystkie', 'wszystkim'].includes(normalized)) return 'all';
   if (/^\d+$/.test(target)) return 'slave:' + target;
   const matches = slavesCatalog.filter(slave => slave.id === target || slave.nazwa.toLowerCase() === normalized);
   if (matches.length === 1) return 'slave:' + matches[0].id;
@@ -388,17 +375,16 @@ function konsolaDlaCelu(cel) {
 function wybierzKonsoleCelu() {
   const cel = $('#term-target').value.trim();
   activeConsole = konsolaDlaCelu(cel);
-  $('#term-prompt').textContent = activeConsole === 'all'
-    ? 'master@wszyscy:~$' : 'master@' + (cel || 'cel') + ':~$';
+  $('#term-prompt').textContent = 'master@' + (cel || 'cel') + ':~$';
   if (!terminalHistory.has(activeConsole)) terminalHistory.set(activeConsole, []);
   renderTerminal();
 }
 
 async function zaladujSlaves() {
-  if (slavesInFlight || !tokenEl.value) return;
+  if (slavesInFlight) return;
   slavesInFlight = true;
   try {
-    const r = await fetch('/api/slaves', {cache: 'no-store', headers: {'X-Token': tokenEl.value}});
+    const r = await fetch('/api/slaves', {cache: 'no-store'});
     if (r.ok) {
       slavesCatalog = (await r.json()).slaves || [];
       wybierzKonsoleCelu();
@@ -414,24 +400,16 @@ async function tick() {
   if (inflight) return;
   inflight = true;
   try {
-    const r = await fetch('/api/stan?since=' + since, {
-      cache: 'no-store', headers: {'X-Token': tokenEl.value}
-    });
-    if (r.status === 403) {
-      $('#conn').textContent = 'Wpisz token panelu, aby odczytać stan i sterować Slaves.';
-      $('#conn').style.display = 'block';
-      $('#status').className = 'pill pause';
-      $('#status').textContent = 'WYMAGANY TOKEN';
-      return;
-    }
+    const r = await fetch('/api/stan?since=' + since, {cache: 'no-store'});
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     bledy = 0; polaczenie(true);
     if (d.seq < since) { since = 0; $('#feed').textContent = ''; bufor = []; return; } // Master zrestartowany
-    renderKpi(d); rysujWykres(d.seria); renderPolecenia(d.polecenia); dodajFeed(d.feed);
+    renderKpi(d); rysujWykres(d.seria); renderSlavesTabela(d.slaves_tabela || []);
+    renderPolecenia(d.polecenia); dodajFeed(d.feed);
     since = d.seq;
   } catch (e) {
-    if (++bledy >= 2) polaczenie(false);   // pojedyncza nieudana próba nie miga banerem
+    if (++bledy >= 2) polaczenie(false);
   } finally {
     inflight = false;
   }
@@ -439,23 +417,134 @@ async function tick() {
 
 function polaczenie(ok) {
   $('#conn').style.display = ok ? 'none' : 'block';
-  if (!ok) { const s = $('#status'); s.className = 'pill off'; s.textContent = 'BRAK POŁĄCZENIA'; }
+  const s = $('#status');
+  if (ok) { s.className = 'pill on'; s.textContent = 'PRACUJE'; }
+  else { s.className = 'pill off'; s.textContent = 'BRAK POŁĄCZENIA'; }
 }
 
 // ---------------------------------------------------------------------- KPI
 function renderKpi(d) {
-  const s = $('#status');
-  s.className = 'pill ' + (d.pracuje ? 'on' : 'pause');
-  s.textContent = d.pracuje ? 'PRACUJE' : 'WSTRZYMANY';
   $('#uptime').textContent = 'uptime ' + fmtDur(d.uptime);
   $('#k-akt').textContent = d.aktywne.toLocaleString('pl-PL');
   $('#k-akt-s').textContent = 'z ' + d.slaves.toLocaleString('pl-PL') + ' zarejestrowanych · połączeń: ' + d.polaczenia.toLocaleString('pl-PL');
   $('#k-zad').textContent = d.zadan_razem.toLocaleString('pl-PL');
-  $('#k-zad-s').textContent = 'w tej sesji: ' + d.sesja.toLocaleString('pl-PL');
+  $('#k-zad-s').textContent = 'w tej sesji Mastera: ' + d.sesja.toLocaleString('pl-PL');
   $('#k-skut').textContent = d.zadan_razem ? (100 * d.dobre / d.zadan_razem).toFixed(1) + '%' : '–';
   $('#k-skut-s').textContent = 'błędne: ' + d.zle.toLocaleString('pl-PL');
   $('#k-tempo').textContent = d.tempo.toFixed(1) + ' /s';
   $('#k-czas').textContent = fmtCzas(d.sr_czas);
+}
+
+// -------------------------------------------------- tabela slaves (per-sesja)
+function sesjaBadge(sesja) {
+  const scls = sesja === 'połączony' ? 'conn' : sesja === 'łączenie' ? 'wait' : sesja === 'błąd' ? 'bad' : 'disc';
+  const stxt = sesja === 'połączony' ? 'POŁĄCZONY' : sesja === 'łączenie' ? 'ŁĄCZENIE…' : sesja === 'błąd' ? 'BŁĄD' : 'ROZŁĄCZONY';
+  return el('span', 'badge ' + scls, stxt);
+}
+
+function renderSlavesTabela(lista) {
+  const tb = $('#slaves-tbody');
+  tb.textContent = '';
+  $('#slaves-pusto').style.display = lista.length ? 'none' : 'block';
+  for (const s of lista) {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'mut', '#' + s.id));
+    tr.appendChild(el('td', null, s.nazwa));
+    tr.appendChild(el('td')).appendChild(sesjaBadge(s.sesja));
+    tr.appendChild(el('td', 'r', s.dobre.toLocaleString('pl-PL')));
+    tr.appendChild(el('td', 'r', s.zle.toLocaleString('pl-PL')));
+    tr.appendChild(el('td', 'r mut', s.ostatnio != null ? Math.floor(s.ostatnio) + 's' : '–'));
+    tr.appendChild(el('td', 'mono mut', s.pauza ? 'PAUZA' : (s.zadanie || '–')));
+    const tdA = el('td');
+    if (s.sesja === 'połączony' || s.sesja === 'łączenie') {
+      const b = el('button', 'bad', 'Rozłącz'); b.onclick = () => slaveRozlacz(s.id); tdA.appendChild(b);
+    } else {
+      const b = el('button', 'ok', 'Połącz'); b.onclick = () => slavePolacz(s.id); tdA.appendChild(b);
+    }
+    const bh = el('button', null, 'Historia'); bh.onclick = () => szczegoly(s.id); tdA.appendChild(bh);
+    if (s.sesja === 'połączony') {
+      tdA.appendChild(document.createTextNode(' '));
+      const bssh = el('button', null, 'SSH');
+      bssh.title = 'Auto-promocja: slave sam zainstaluje klucz i raportuje IP.\n'
+        + 'Shift+klik → formularz ręczny.';
+      bssh.onclick = (e) => (e.shiftKey ? promujDoSSH(s.id, s.nazwa) : promujDoSSHAuto(s.id, s.nazwa));
+      tdA.appendChild(bssh);
+    }
+    tr.appendChild(tdA);
+    tb.appendChild(tr);
+  }
+}
+
+async function promujDoSSHAuto(slaveId, slaveNazwa) {
+  try {
+    await api('/api/ssh/z_slave_auto', {slave_id: slaveId, nazwa: slaveNazwa});
+    komunikat('Auto-promocja slave #' + slaveId + ' wystartowała — postęp w zakładce SSH.', true);
+  } catch (e) {
+    komunikat('Nie udało się odpalić auto-promocji: ' + e.message, false);
+  }
+}
+
+function promujDoSSH(slaveId, slaveNazwa) {
+  const m = $('#modal'); m.textContent = ''; $('#overlay').style.display = 'flex';
+  const top = el('div'); top.style.display = 'flex'; top.style.alignItems = 'center';
+  top.appendChild(el('h3', null, 'Promuj Slave #' + slaveId + ' "' + slaveNazwa + '" do SSH'));
+  const sp = el('span'); sp.style.flex = '1'; top.appendChild(sp);
+  const x = el('button', null, 'Zamknij'); x.onclick = zamknij; top.appendChild(x);
+  m.appendChild(top);
+  m.appendChild(el('div', 'mut',
+    'Master wygeneruje klucz ed25519 (jeden raz), wyśle go kanałem Slave do '
+    + '~/.ssh/authorized_keys, doda hosta do listy SSH i spróbuje otworzyć sesję.'));
+
+  const form = el('div');
+  form.style.cssText = 'margin-top:12px;display:grid;grid-template-columns:120px 1fr;gap:8px;align-items:center';
+  function pole(etykieta, placeholder, wartosc) {
+    form.appendChild(el('div', 'mut', etykieta));
+    const inp = el('input'); inp.type = 'text'; inp.placeholder = placeholder;
+    if (wartosc !== undefined) inp.value = wartosc;
+    form.appendChild(inp);
+    return inp;
+  }
+  const iNazwa = pole('Nazwa', 'nazwa hosta SSH', slaveNazwa);
+  const iHost  = pole('Host',  'IP lub domena (docelowo pod SSH)', '');
+  const iPort  = pole('Port',  '22', '22');
+  const iUser  = pole('Użytkownik', 'opcjonalnie (login SSH)', '');
+  m.appendChild(form);
+
+  const hint = el('div', 'mut'); hint.style.marginTop = '10px'; hint.innerHTML = '&nbsp;';
+  m.appendChild(hint);
+
+  const bar = el('div');
+  bar.style.cssText = 'margin-top:12px;display:flex;gap:8px';
+  const btn = el('button', 'prim', 'Promuj');
+  btn.onclick = async () => {
+    const nazwa = iNazwa.value.trim(), host = iHost.value.trim();
+    if (!nazwa || !host) { hint.textContent = 'Podaj nazwę i host.'; return; }
+    btn.disabled = true; hint.textContent = 'Wysyłam klucz do Slave…';
+    try {
+      await api('/api/ssh/z_slave', {
+        slave_id: slaveId, nazwa, host,
+        port: parseInt(iPort.value) || 22,
+        uzytkownik: iUser.value.trim(),
+      });
+      hint.textContent = 'OK — klucz wysłany. Postęp zobaczysz w zakładce SSH.';
+      setTimeout(zamknij, 1200);
+    } catch (e) {
+      btn.disabled = false; hint.textContent = e.message;
+    }
+  };
+  bar.appendChild(btn);
+  const cncl = el('button', null, 'Anuluj'); cncl.onclick = zamknij; bar.appendChild(cncl);
+  m.appendChild(bar);
+  iHost.focus();
+}
+
+async function slavePolacz(id) {
+  try { await api('/api/slave/polacz', {id}); tick(); }
+  catch (e) { komunikat(e.message, false); }
+}
+async function slaveRozlacz(id) {
+  try { await api('/api/slave/rozlacz', {id}); tick(); }
+  catch (e) { komunikat(e.message, false); }
 }
 
 // ------------------------------------------------------------------- wykres
@@ -493,7 +582,7 @@ function renderPolecenia(lista) {
     const tr = el('tr');
     tr.appendChild(el('td', 'mut', '#' + p.id));
     tr.appendChild(el('td', 'mono', p.polecenie));
-    tr.appendChild(el('td', null, p.cel === 'wszystkie' ? 'wszystkie' : '#' + p.cel));
+    tr.appendChild(el('td', null, '#' + p.cel));
     tr.appendChild(el('td', 'r', p.adresaci.toLocaleString('pl-PL')));
     const td = el('td'); td.appendChild(document.createTextNode(p.wykonane.toLocaleString('pl-PL')));
     const bar = el('span', 'bar'), fill = el('i'); fill.style.width = (p.adresaci ? Math.min(100, 100 * p.wykonane / p.adresaci) : 0) + '%';
@@ -548,37 +637,37 @@ $('#pauza').onclick = () => {
   odswiezPrzycisk();
 };
 
-// ---------------------------------------------------------------- sterowanie
-const tokenEl = $('#token');
-tokenEl.value = sessionStorage.getItem('masterToken') || '';
-tokenEl.oninput = () => { sessionStorage.setItem('masterToken', tokenEl.value); zaladujSlaves(); };
-zaladujSlaves();
-
+// ---------------------------------------------------------------- meta + makra
 let macrosInFlight = false;
-async function zaladujMakra() {
+async function zaladujMeta() {
   if (macrosInFlight) return;
   macrosInFlight = true;
   try {
     const r = await fetch('/api/meta', {cache: 'no-store'});
     if (!r.ok) return;
-    const d = await r.json(), select = $('#term-macro');
+    const d = await r.json();
+    meta.token_rejestracji = d.token_rejestracji || '';
+    meta.port_slaves = d.port_slaves || 9000;
+    meta.https_slaves = !!d.https_slaves;
+    const select = $('#term-macro');
     const macros = d.macros || [];
-    if ([...select.options].slice(1).map(o => o.value).join('\n') === macros.join('\n')) return;
-    const wybrane = select.value;
-    select.textContent = '';
-    select.appendChild(el('option', null, 'pliki .sh'));
-    for (const nazwa of macros) {
-      const option = el('option', null, nazwa);
-      option.value = nazwa;
-      select.appendChild(option);
+    if ([...select.options].slice(1).map(o => o.value).join('\n') !== macros.join('\n')) {
+      const wybrane = select.value;
+      select.textContent = '';
+      select.appendChild(el('option', null, 'pliki .sh'));
+      for (const nazwa of macros) {
+        const option = el('option', null, nazwa);
+        option.value = nazwa;
+        select.appendChild(option);
+      }
+      if (macros.includes(wybrane)) select.value = wybrane;
     }
-    if (macros.includes(wybrane)) select.value = wybrane;
   } catch (e) {} finally {
     macrosInFlight = false;
   }
 }
-zaladujMakra();
-setInterval(zaladujMakra, 5000);
+zaladujMeta();
+setInterval(zaladujMeta, 10000);
 $('#term-macro').onchange = e => {
   if (!e.target.value) return;
   $('#term-command').value = 'makro ' + e.target.value;
@@ -592,93 +681,46 @@ function komunikat(tekst, ok) {
 async function api(sciezka, dane) {
   const r = await fetch(sciezka, {
     method: 'POST', cache: 'no-store',
-    headers: {'Content-Type': 'application/json', 'X-Token': tokenEl.value},
+    headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(dane),
   });
   let d = {};
   try { d = await r.json(); } catch (e) {}
-  if (!r.ok) {
-    if (r.status === 403) { tokenEl.focus(); throw new Error('zły lub brak tokenu (wpisz go w polu „token panelu”)'); }
-    throw new Error(d.blad || 'błąd ' + r.status);
-  }
+  if (!r.ok) throw new Error(d.blad || 'błąd ' + r.status);
   return d;
 }
 
-async function akcjaMaster(akcja) {
-  try {
-    await api('/api/master', {akcja});
-    komunikat(akcja === 'start' ? 'Master: START - słucha Slaves' : 'Master: STOP - ignoruje Slaves', true);
-    tick();
-  } catch (e) { komunikat(e.message, false); }
+// ----------------------------------------------- dodaj slave CLI generator
+function budujPolecenieSlave() {
+  const master = $('#add-master').value.trim();
+  const nazwa = $('#add-nazwa').value.trim();
+  if (!master) { $('#add-hint').textContent = 'Podaj adres Mastera.'; return ''; }
+  if (!meta.token_rejestracji) { $('#add-hint').textContent = 'Nie udało się pobrać tokenu rejestracji — odśwież stronę.'; return ''; }
+  const parts = ['python3', 'slave.py', '--master', master, '--token-rejestracji', meta.token_rejestracji];
+  if (meta.https_slaves) {
+    if (meta.port_slaves && meta.port_slaves !== 443) parts.push('--port', String(meta.port_slaves));
+  } else if (meta.port_slaves && meta.port_slaves !== 443) {
+    parts.push('--port', String(meta.port_slaves), '--no-https');
+  }
+  if (nazwa) parts.push('--nazwa', nazwa);
+  return parts.join(' ');
 }
-
-async function wyslij(cel, polecenie, args) {
-  try {
-    const d = await api('/api/polecenie', {cel, polecenie, args});
-    komunikat('Polecenie #' + d.id + " '" + [polecenie, ...args].join(' ') + "' wysłane " +
-              (d.cel === 'wszystkie' ? 'do wszystkich (' + d.adresaci.toLocaleString('pl-PL') + ')' : 'do #' + d.cel), true);
-    tick();
-  } catch (e) { komunikat(e.message, false); }
-}
-
-function zakonczWszystkich() {
-  if (confirm('Zakończyć pracę WSZYSTKICH Slaves? Same się nie uruchomią ponownie.')) wyslij('wszystkie', 'stop', []);
-}
-
-let startSlaveWygasaTs = 0, startSlaveTimer = null;
-function startSlaveOdliczanie() {
-  clearInterval(startSlaveTimer);
-  startSlaveTimer = setInterval(() => {
-    const pozostalo = Math.round(startSlaveWygasaTs - Date.now() / 1000);
-    const hint = $('#start-slave-hint');
-    if (pozostalo <= 0) {
-      hint.textContent = 'Kod wygasł - wygeneruj nowy.';
-      $('#start-slave-cmd').style.display = 'none';
-      $('#start-slave-btns').style.display = 'none';
-      clearInterval(startSlaveTimer);
-    } else {
-      hint.textContent = 'Ważny jeszcze ' + pozostalo + ' s albo do pierwszego użycia - potem trzeba wygenerować nowy.';
-    }
-  }, 1000);
-}
-$('#b-start-slave').onclick = async () => {
-  const domena = $('#start-domena').value.trim();
-  if (!domena) { $('#start-slave-hint').textContent = 'Podaj domenę/adres Master.'; return; }
-  try {
-    const d = await api('/api/token-jednorazowy', {
-      domena, nazwa: $('#start-nazwa').value.trim(), https: $('#start-https').checked,
-    });
-    $('#start-curl-cmd').value = d.curl;
-    $('#start-curl-box').style.display = 'block';
-    $('#start-slave-cmd').value = d.polecenie;
-    $('#start-long-box').style.display = 'block';
-    startSlaveWygasaTs = d.wygasa_ts;
-    startSlaveOdliczanie();
-    komunikat('Jednorazowy kod wygenerowany - przekaż polecenie zaufanej osobie/urządzeniu.', true);
-  } catch (e) { $('#start-slave-hint').textContent = e.message; }
+$('#b-add-build').onclick = () => {
+  const polecenie = budujPolecenieSlave();
+  if (polecenie) { $('#add-cmd').value = polecenie; $('#add-hint').textContent = 'Skopiuj polecenie i uruchom na docelowej maszynie.'; }
 };
-$('#b-start-curl-copy').onclick = () => {
-  const pole = $('#start-curl-cmd');
-  pole.select();
-  navigator.clipboard?.writeText(pole.value).catch(() => document.execCommand('copy'));
-  komunikat('Polecenie curl skopiowane do schowka.', true);
-};
-$('#b-start-slave-copy').onclick = () => {
-  const pole = $('#start-slave-cmd');
+$('#b-add-copy').onclick = () => {
+  const pole = $('#add-cmd');
+  if (!pole.value) { komunikat('Najpierw wygeneruj polecenie.', false); return; }
   pole.select();
   navigator.clipboard?.writeText(pole.value).catch(() => document.execCommand('copy'));
   komunikat('Polecenie skopiowane do schowka.', true);
 };
 
-$('#b-start').onclick = () => akcjaMaster('start');
-$('#b-stop').onclick = () => akcjaMaster('stop');
-$('#b-pauza').onclick = () => wyslij('wszystkie', 'pauza', []);
-$('#b-wznow').onclick = () => wyslij('wszystkie', 'wznow', []);
-$('#b-koniec').onclick = zakonczWszystkich;
 $('#b-hist').onclick = () => {
   const id = $('#term-target').value.trim();
   if (!id) return komunikat('Wpisz ID lub nazwę Slaves.', false);
-  if (id === '*' || id.includes('-')) return komunikat('Historia wymaga jednego ID lub nazwy Slaves.', false);
+  if (id.includes('-')) return komunikat('Historia wymaga jednego ID lub nazwy Slaves.', false);
   szczegoly(id);
 };
 
@@ -694,24 +736,32 @@ $('#b-term-send').onclick = async () => {
     return;
   }
   if (command.toLowerCase() === 'help') {
-    zapiszTerminal('Makro: makro <nazwa> uruchamia plik macros/<nazwa>.sh; każda linia to osobne polecenie bez shella. Pojedyncze polecenie: program i flagi, np. ls -la. clear czyści ekran.', 'pending');
+    zapiszTerminal('Makro: makro <nazwa> uruchamia plik macros/<nazwa>.sh. Pojedyncze polecenie: program i flagi (ls -la). Pliki: wyslij <zdalna_sciezka> (otworzy picker), pobierz <zdalna_sciezka>. clear czyści ekran.', 'pending');
     input.value = '';
     return;
   }
-  if (!target) return zapiszTerminal('Wpisz ID, nazwę, zakres lub * jako cel.', 'error');
+  if (!target) return zapiszTerminal('Wpisz ID lub nazwę Slave\'a.', 'error');
+  const czesci = command.split(/\s+/);
+  const slowo = czesci[0].toLowerCase();
+  if (slowo === 'wyslij' || slowo === 'pobierz') {
+    input.value = '';
+    if (target.includes('-')) {
+      zapiszTerminal('Transfer plików wymaga pojedynczego Slave\'a (nie zakresu).', 'error');
+      return;
+    }
+    if (slowo === 'wyslij') return slaveWyslijPlik(target, czesci.slice(1).join(' '));
+    return slavePobierzPlik(target, czesci.slice(1).join(' '));
+  }
   input.value = '';
   const consoleKey = konsolaDlaCelu(target);
   try {
     const d = await api('/api/terminal', {cel: target, komenda: command});
-    const resultConsoleKey = d.polecenia.length === 1 && d.polecenia[0].cel !== 'wszystkie'
-      ? 'slave:' + d.polecenia[0].cel : consoleKey;
+    const resultConsoleKey = d.polecenia.length === 1 ? 'slave:' + d.polecenia[0].cel : consoleKey;
     zapiszTerminal(`master@${target}:~$ ${command}`, 'sent', resultConsoleKey);
     for (const p of d.polecenia) {
       if (p.adresaci > 0) terminalPending.set(p.id, {remaining: p.adresaci, consoleKey: resultConsoleKey});
     }
-    const odbiorcy = d.cel === '*' || d.cel.toLowerCase() === 'wszystkie'
-      ? `wszystkich (${d.adresaci})`
-      : d.cele.map(id => id === 'wszystkie' ? 'wszystkich' : '#' + id).join(', ');
+    const odbiorcy = d.cele.map(id => '#' + id).join(', ');
     zapiszTerminal(`[polecenie wysłane do ${odbiorcy}; oczekiwanie na odpowiedź]`, 'pending', resultConsoleKey);
   } catch (e) {
     zapiszTerminal(e.message, 'error', consoleKey);
@@ -719,13 +769,69 @@ $('#b-term-send').onclick = async () => {
 };
 $('#term-command').onkeydown = e => { if (e.key === 'Enter') $('#b-term-send').click(); };
 
+function slaveWyslijPlik(slaveId, zdalna) {
+  if (!zdalna) {
+    zapiszTerminal('Użycie: wyslij <ścieżka_na_slave>', 'error');
+    return;
+  }
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  picker.onchange = async () => {
+    const plik = picker.files && picker.files[0];
+    if (!plik) return;
+    zapiszTerminal(`[→] wysyłam "${plik.name}" (${plik.size} B) do #${slaveId}:${zdalna}…`, 'pending');
+    try {
+      const url = '/api/slave/wyslij?id=' + encodeURIComponent(slaveId)
+                + '&zdalny=' + encodeURIComponent(zdalna);
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/octet-stream', 'Content-Length': plik.size},
+        body: plik,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.blad || ('błąd ' + r.status));
+      zapiszTerminal(`[OK] polecenie #${d.polecenie_id} wysłane do slave; ${d.bajtow} B sha256=${d.sha256.slice(0,16)}…`, 'result');
+    } catch (e) {
+      zapiszTerminal('[BŁĄD] ' + e.message, 'error');
+    }
+  };
+  picker.click();
+}
+
+async function slavePobierzPlik(slaveId, zdalna) {
+  if (!zdalna) {
+    zapiszTerminal('Użycie: pobierz <ścieżka_na_slave>', 'error');
+    return;
+  }
+  const nazwa = zdalna.split('/').pop() || 'plik.bin';
+  zapiszTerminal(`[←] pobieram #${slaveId}:${zdalna} (slave strumieniuje chunkami)…`, 'pending');
+  try {
+    const url = '/api/slave/pobierz?id=' + encodeURIComponent(slaveId)
+              + '&zdalny=' + encodeURIComponent(zdalna)
+              + '&nazwa=' + encodeURIComponent(nazwa)
+              + '&timeout=120';
+    const r = await fetch(url, {cache: 'no-store'});
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.blad || ('błąd ' + r.status));
+    }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = nazwa;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    zapiszTerminal(`[OK] pobrano ${blob.size} B z #${slaveId}:${zdalna} → ${nazwa}`, 'result');
+  } catch (e) {
+    zapiszTerminal('[BŁĄD] ' + e.message, 'error');
+  }
+}
+
 // ---------------------------------------------------------- okno szczegółów
 async function szczegoly(id) {
   const m = $('#modal'); m.textContent = 'Ładuję…'; $('#overlay').style.display = 'flex';
   try {
-    const r = await fetch('/api/slave/' + encodeURIComponent(id), {
-      cache: 'no-store', headers: {'X-Token': tokenEl.value}
-    });
+    const r = await fetch('/api/slave/' + encodeURIComponent(id), {cache: 'no-store'});
     const d = await r.json();
     if (!r.ok) throw new Error(d.blad || r.status);
     m.textContent = '';
@@ -773,6 +879,7 @@ function switchTab(tab) {
 }
 
 let sshSince = 0, sshInflight = false, sshPaused = false, sshBufor = [], sshZadan = 0;
+let sshKey = '';
 
 function sshAppend(tekst, klasa) {
   const out = $('#ssh-output');
@@ -785,9 +892,7 @@ async function sshTick() {
   if (sshInflight || activeTab !== 'ssh') return;
   sshInflight = true;
   try {
-    const r = await fetch('/api/ssh/stan?since=' + sshSince, {
-      cache: 'no-store', headers: {'X-Token': tokenEl.value}
-    });
+    const r = await fetch('/api/ssh/stan?since=' + sshSince, {cache: 'no-store'});
     if (!r.ok) return;
     const d = await r.json();
     renderSSH(d);
@@ -800,38 +905,55 @@ function renderSSH(d) {
   $('#ssh-k-hosty').textContent = d.hosty.length;
   $('#ssh-k-ok').textContent = polaczone;
 
-  const tb = $('#ssh-hosty');
-  tb.textContent = '';
-  const sel = $('#ssh-target'), oldVal = sel.value;
-  sel.textContent = '';
-  const optAll = el('option', null, 'Wszystkie'); optAll.value = '*'; sel.appendChild(optAll);
+  // Rebuild tabeli i selecta tylko gdy "istotne" dane się zmieniły — inaczej
+  // dropdown "Host" zamyka się pod palcami przy każdym 1.5s pollu.
+  const nowyKey = d.hosty.map(h =>
+    [h.id, h.nazwa, h.uzytkownik, h.host, h.port, h.sesja, h.has_haslo, h.klucz, h.blad].join('|')
+  ).join(';');
 
-  for (const h of d.hosty) {
-    const tr = el('tr');
-    tr.appendChild(el('td', 'mut', '#' + h.id));
-    tr.appendChild(el('td', null, h.nazwa));
-    tr.appendChild(el('td', 'mono', (h.uzytkownik ? h.uzytkownik + '@' : '') + h.host));
-    tr.appendChild(el('td', 'r', String(h.port)));
-    const scls = h.sesja === 'połączony' ? 'conn' : h.sesja === 'łączenie' ? 'wait' : h.sesja === 'błąd' ? 'bad' : 'disc';
-    const stxt = h.sesja === 'połączony' ? 'POŁĄCZONY' : h.sesja === 'łączenie' ? 'ŁĄCZENIE…' : h.sesja === 'błąd' ? 'BŁĄD' : 'ROZŁĄCZONY';
-    const tdSe = el('td'); tdSe.appendChild(el('span', 'badge ' + scls, stxt));
-    if (h.blad) { tdSe.appendChild(document.createTextNode(' ')); tdSe.appendChild(el('span', 'mut', h.blad.substring(0, 40))); }
-    tr.appendChild(tdSe);
-    tr.appendChild(el('td', 'r mut', h.ostatnio != null ? Math.floor(h.ostatnio) + 's' : '–'));
-    const tdA = el('td');
-    if (h.sesja === 'połączony') {
-      const bDisc = el('button', 'bad', 'Rozłącz'); bDisc.onclick = () => sshRozlacz(h.id); tdA.appendChild(bDisc);
-    } else if (h.sesja !== 'łączenie') {
-      const bConn = el('button', 'ok', 'Połącz'); bConn.onclick = () => sshPolacz(h.id); tdA.appendChild(bConn);
+  if (nowyKey !== sshKey) {
+    sshKey = nowyKey;
+    const tb = $('#ssh-hosty');
+    tb.textContent = '';
+    const sel = $('#ssh-target'), oldVal = sel.value;
+    sel.textContent = '';
+    const optAll = el('option', null, 'Wszystkie'); optAll.value = '*'; sel.appendChild(optAll);
+
+    for (const h of d.hosty) {
+      const tr = el('tr');
+      tr.appendChild(el('td', 'mut', '#' + h.id));
+      const tdN = el('td', null, h.nazwa);
+      const auth = h.has_haslo ? 'pwd' : (h.klucz ? 'key' : '');
+      if (auth) { tdN.appendChild(document.createTextNode(' ')); tdN.appendChild(el('span', 'mut', auth)); }
+      tr.appendChild(tdN);
+      tr.appendChild(el('td', 'mono', (h.uzytkownik ? h.uzytkownik + '@' : '') + h.host));
+      tr.appendChild(el('td', 'r', String(h.port)));
+      const tdSe = el('td'); tdSe.appendChild(sesjaBadge(h.sesja));
+      if (h.blad) {
+        tdSe.appendChild(document.createTextNode(' '));
+        const sp = el('span', 'mut', h.blad.substring(0, 40));
+        sp.title = h.blad;
+        tdSe.appendChild(sp);
+      }
+      tr.appendChild(tdSe);
+      tr.appendChild(el('td', 'r mut', h.ostatnio != null ? Math.floor(h.ostatnio) + 's' : '–'));
+      const tdA = el('td');
+      if (h.sesja === 'połączony') {
+        const bDisc = el('button', 'bad', 'Rozłącz'); bDisc.onclick = () => sshRozlacz(h.id); tdA.appendChild(bDisc);
+      } else if (h.sesja !== 'łączenie') {
+        const bConn = el('button', 'ok', 'Połącz'); bConn.onclick = () => sshPolacz(h.id); tdA.appendChild(bConn);
+      }
+      tdA.appendChild(document.createTextNode(' '));
+      const bTest = el('button', null, 'Test'); bTest.onclick = () => sshTestuj(h.id); tdA.appendChild(bTest);
+      tdA.appendChild(document.createTextNode(' '));
+      const bDel = el('button', 'bad', '✕'); bDel.onclick = () => sshUsun(h.id, h.nazwa); tdA.appendChild(bDel);
+      tr.appendChild(tdA);
+      tb.appendChild(tr);
+      const opt = el('option', null, h.nazwa + (h.sesja === 'połączony' ? ' ●' : '')); opt.value = h.id; sel.appendChild(opt);
     }
-    tdA.appendChild(document.createTextNode(' '));
-    const bDel = el('button', 'bad', '✕'); bDel.onclick = () => sshUsun(h.id, h.nazwa); tdA.appendChild(bDel);
-    tr.appendChild(tdA);
-    tb.appendChild(tr);
-    const opt = el('option', null, h.nazwa + (h.sesja === 'połączony' ? ' ●' : '')); opt.value = h.id; sel.appendChild(opt);
+    if (d.hosty.some(h => h.id === oldVal) || oldVal === '*') sel.value = oldVal;
+    $('#ssh-hosty-pusto').style.display = d.hosty.length ? 'none' : 'block';
   }
-  if (d.hosty.some(h => h.id === oldVal) || oldVal === '*') sel.value = oldVal;
-  $('#ssh-hosty-pusto').style.display = d.hosty.length ? 'none' : 'block';
 
   sshRenderFeed(d.feed);
 }
@@ -871,13 +993,19 @@ async function sshDodaj() {
   try {
     await api('/api/ssh/dodaj', {
       nazwa, host, port: parseInt($('#ssh-port').value) || 22,
-      uzytkownik: $('#ssh-user').value.trim(), klucz: $('#ssh-klucz').value.trim(),
+      uzytkownik: $('#ssh-user').value.trim(),
+      klucz: $('#ssh-klucz').value.trim(),
+      haslo: $('#ssh-haslo').value,
     });
     $('#ssh-nazwa').value = ''; $('#ssh-host').value = ''; $('#ssh-port').value = '';
-    $('#ssh-user').value = ''; $('#ssh-klucz').value = '';
+    $('#ssh-user').value = ''; $('#ssh-klucz').value = ''; $('#ssh-haslo').value = '';
     $('#ssh-hint').innerHTML = '&nbsp;';
     sshTick();
   } catch(e) { $('#ssh-hint').textContent = e.message; }
+}
+
+async function sshTestuj(id) {
+  try { await api('/api/ssh/testuj', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
 }
 
 async function sshUsun(id, nazwa) {
@@ -893,16 +1021,79 @@ async function sshRozlacz(id) {
   try { await api('/api/ssh/rozlacz', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
 }
 
-async function sshTestuj(id) {
-  try { await api('/api/ssh/testuj', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
-}
-
 async function sshWykonaj() {
   const komenda = $('#ssh-command').value.trim(), cel = $('#ssh-target').value;
   if (!komenda) return;
+  const czesci = komenda.split(/\s+/);
+  const slowo = czesci[0].toLowerCase();
+  if (slowo === 'wyslij' || slowo === 'pobierz') {
+    $('#ssh-command').value = '';
+    if (cel === '*' || !cel) {
+      sshAppend('Transfer plików wymaga wskazania pojedynczego hosta (nie "wszystkie").', 'error');
+      return;
+    }
+    if (slowo === 'wyslij') return sshWyslijPlik(cel, czesci.slice(1).join(' '));
+    return sshPobierzPlik(cel, czesci.slice(1).join(' '));
+  }
   $('#ssh-command').value = '';
   try { await api('/api/ssh/wykonaj', {komenda, cel}); sshTick(); }
   catch(e) { sshAppend(e.message, 'error'); }
+}
+
+function sshWyslijPlik(hostId, zdalna) {
+  if (!zdalna) {
+    sshAppend('Użycie: wyslij <zdalna_ścieżka>', 'error');
+    return;
+  }
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  picker.onchange = async () => {
+    const plik = picker.files && picker.files[0];
+    if (!plik) return;
+    sshAppend(`[→] wysyłam "${plik.name}" (${plik.size} B) do #${hostId}:${zdalna}…`, 'pending');
+    try {
+      const url = '/api/ssh/wyslij?id=' + encodeURIComponent(hostId) + '&zdalny=' + encodeURIComponent(zdalna);
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/octet-stream', 'Content-Length': plik.size},
+        body: plik,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.blad || ('błąd ' + r.status));
+      sshAppend(`[OK] wysłano ${d.bajtow} B → #${hostId}:${zdalna} (${d.wynik})`, 'result');
+    } catch (e) {
+      sshAppend('[BŁĄD] ' + e.message, 'error');
+    }
+  };
+  picker.click();
+}
+
+async function sshPobierzPlik(hostId, zdalna) {
+  if (!zdalna) {
+    sshAppend('Użycie: pobierz <zdalna_ścieżka>', 'error');
+    return;
+  }
+  sshAppend(`[←] pobieram #${hostId}:${zdalna}…`, 'pending');
+  try {
+    const nazwa = zdalna.split('/').pop() || 'plik.bin';
+    const url = '/api/ssh/pobierz?id=' + encodeURIComponent(hostId)
+              + '&zdalny=' + encodeURIComponent(zdalna)
+              + '&nazwa=' + encodeURIComponent(nazwa);
+    const r = await fetch(url, {cache: 'no-store'});
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.blad || ('błąd ' + r.status));
+    }
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = nazwa;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    sshAppend(`[OK] pobrano ${blob.size} B z #${hostId}:${zdalna} → ${nazwa}`, 'result');
+  } catch (e) {
+    sshAppend('[BŁĄD] ' + e.message, 'error');
+  }
 }
 
 $('#b-ssh-dodaj').onclick = sshDodaj;
@@ -924,9 +1115,7 @@ async function hostyTick() {
   if (hostyInflight || activeTab !== 'hosty') return;
   hostyInflight = true;
   try {
-    const r = await fetch('/api/hosty-znane', {
-      cache: 'no-store', headers: {'X-Token': tokenEl.value}
-    });
+    const r = await fetch('/api/hosty-znane', {cache: 'no-store'});
     if (!r.ok) return;
     renderHosty(await r.json());
   } catch(e) {} finally { hostyInflight = false; }
@@ -944,7 +1133,7 @@ function sortujHosty(lista) {
     });
   } else if (hostySort === 'nazwa') {
     kopia.sort((a, b) => a.nazwa.localeCompare(b.nazwa));
-  } else { // status: połączone → aktywne → reszta, potem po nazwie
+  } else {
     kopia.sort((a, b) => (Number(b.polaczony) - Number(a.polaczony))
                      || (Number(b.aktywny) - Number(a.aktywny))
                      || a.nazwa.localeCompare(b.nazwa));
@@ -992,7 +1181,6 @@ function ustawSortowanie(klucz) {
   for (const b of document.querySelectorAll('.sortbar button')) {
     b.classList.toggle('active', b.dataset.sort === klucz);
   }
-  // ponowny render z tego co ostatnio pobraliśmy — najprościej: tick
   hostyTick();
 }
 
@@ -1003,6 +1191,7 @@ ustawSortowanie(hostySort);
 
 $('#b-hz-polacz-all').onclick = () => sshPolacz('*').then(() => hostyTick());
 
+zaladujSlaves();
 setInterval(tick, 1000);
 tick();
 </script>

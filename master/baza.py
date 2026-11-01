@@ -9,9 +9,9 @@ import threading
 from pathlib import Path
 
 from master.config import (
-    KATALOG_DANYCH, PLIK_BAZY, PLIK_TOKEN_REJESTRACJI, PLIK_TOKENU,
+    KATALOG_DANYCH, PLIK_BAZY, PLIK_TOKEN_REJESTRACJI,
     STARY_STAN, LEGACY_STARY_STAN,
-    wczytaj_token_rejestracji, wczytaj_token_panelu,
+    wczytaj_token_rejestracji,
 )
 from master.stan import Slave, Stan
 
@@ -19,7 +19,9 @@ from master.stan import Slave, Stan
 
 SCHEMAT = """
 CREATE TABLE IF NOT EXISTS slaves(
-    id TEXT PRIMARY KEY, nazwa TEXT NOT NULL, token TEXT NOT NULL, zarejestrowany REAL NOT NULL);
+    id TEXT PRIMARY KEY, nazwa TEXT NOT NULL, token TEXT NOT NULL,
+    zarejestrowany REAL NOT NULL,
+    sesja TEXT NOT NULL DEFAULT 'rozłączony');
 CREATE TABLE IF NOT EXISTS zadania(
     nr INTEGER PRIMARY KEY AUTOINCREMENT, zadanie_id INTEGER, slave_id TEXT NOT NULL,
     ts REAL NOT NULL, dzialanie TEXT, poprawna TEXT, odpowiedz TEXT,
@@ -53,7 +55,6 @@ def migracja_nazw_plikow():
                 os.replace(source, Path(str(PLIK_BAZY) + suffix))
     for old_name, new_path in (
         ("minion_registration_token.txt", PLIK_TOKEN_REJESTRACJI),
-        ("panel_token.txt", PLIK_TOKENU),
         ("gru_stan.json", STARY_STAN),
     ):
         old_path = KATALOG_DANYCH / old_name
@@ -94,11 +95,14 @@ def migruj_nazwy_schematu(db):
 
 
 def migruj_schemat(db):
-    """Baza z v3 nie ma kolumn operacja/liczby — dodajemy je, stare wiersze zostają."""
+    """Dodaje brakujące kolumny w istniejących tabelach (stare bazy)."""
     kolumny = {w[1] for w in db.execute("PRAGMA table_info(zadania)")}
     for nazwa in ("operacja", "liczby"):
         if nazwa not in kolumny:
             db.execute(f"ALTER TABLE zadania ADD COLUMN {nazwa} TEXT")
+    kolumny_slaves = {w[1] for w in db.execute("PRAGMA table_info(slaves)")}
+    if "sesja" not in kolumny_slaves:
+        db.execute("ALTER TABLE slaves ADD COLUMN sesja TEXT NOT NULL DEFAULT 'rozłączony'")
     db.commit()
 
 
@@ -108,8 +112,8 @@ def importuj_stary_stan(db):
     if legacy_state.exists() and not db.execute("SELECT 1 FROM slaves LIMIT 1").fetchone():
         for slave_id, record in json.loads(legacy_state.read_text()).items():
             token = record.get("token", record.get("klucz"))
-            db.execute("INSERT INTO slaves VALUES (?,?,?,?)",
-                       (slave_id, record["nazwa"], token, time.time()))
+            db.execute("INSERT INTO slaves VALUES (?,?,?,?,?)",
+                       (slave_id, record["nazwa"], token, time.time(), "rozłączony"))
         db.commit()
         legacy_state.rename(legacy_state.with_name(legacy_state.name + ".migrated"))
         print(f"[Master] Zaimportowano Slave state z {legacy_state.name} do bazy.")
@@ -125,9 +129,18 @@ def inicjuj_baze(db):
 # ─── odczyt ──────────────────────────────────────────────────────────────────
 
 def wczytaj_slaves(db):
-    """Slaves z bazy razem z historycznymi licznikami (statystyki przeżywają restart)."""
-    slaves = {slave_id: Slave(nazwa, token) for slave_id, nazwa, token in db.execute(
-        "SELECT id, nazwa, token FROM slaves ORDER BY CAST(id AS INTEGER)")}
+    """Slaves z bazy razem z historycznymi licznikami (statystyki przeżywają restart).
+
+    Master trzyma sesję za wszelką cenę: jedyną sesją, która przeżywa restart
+    w stanie "rozłączony", jest ta, którą admin explicitnie zamknął. Każdy inny
+    stan (połączony/łączenie/błąd) startuje jako "łączenie" — otwarta, czekamy
+    aż Slave się odezwie i pierwszy udany pakiet przełączy go na "połączony".
+    """
+    slaves = {}
+    for slave_id, nazwa, token, sesja_db in db.execute(
+            "SELECT id, nazwa, token, sesja FROM slaves ORDER BY CAST(id AS INTEGER)"):
+        sesja = "rozłączony" if sesja_db == "rozłączony" else "łączenie"
+        slaves[slave_id] = Slave(nazwa, token, sesja=sesja)
     for slave_id, dobre, zle, suma in db.execute(
             "SELECT slave_id, SUM(ok), SUM(1 - ok), SUM(czas) FROM zadania GROUP BY slave_id"):
         if slave_id in slaves:
@@ -147,7 +160,6 @@ def utworz_stan():
     stan.zle_razem = sum(slave.zle for slave in stan.slaves.values())
     stan.suma_czasu_razem = sum(slave.suma_czasu for slave in stan.slaves.values())
     stan.licznik_zadan = db.execute("SELECT COALESCE(MAX(zadanie_id), 0) FROM zadania").fetchone()[0]
-    stan.token_panelu = wczytaj_token_panelu()
     return stan
 
 

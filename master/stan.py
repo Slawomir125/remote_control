@@ -16,7 +16,7 @@ class Polecenie:
     nazwa: str
     args: list
     ts: float
-    cel: str                       # "wszystkie" albo ID Slaves
+    cel: str                       # ID Slaves
     adresaci: int = 0
     wykonane: int = 0              # ile Slaves potwierdziło
     bledy: int = 0                 # ile z nich zgłosiło błąd
@@ -27,6 +27,7 @@ class Polecenie:
 class Slave:
     nazwa: str
     token: str                                   # token bearer Slaves
+    sesja: str = "łączenie"                      # rozłączony / łączenie / połączony / błąd
     dobre: int = 0
     zle: int = 0
     suma_czasu: float = 0.0
@@ -34,7 +35,6 @@ class Slave:
     zadanie: Optional[dict] = None               # zadanie w toku
     pauza: bool = True
     polecenia: list = field(default_factory=list)   # polecenia czekające na potwierdzenie
-    rozgl_ack: int = 0                           # ostatnie potwierdzone polecenie "do wszystkich"
     ts: deque = field(default_factory=deque)     # czasy ukończeń z ostatniej minuty
 
 
@@ -43,7 +43,6 @@ class Stan:
     db: object                                   # sqlite3.Connection
     token_rejestracji: str
     slaves: dict = field(default_factory=dict)   # id -> Slave
-    pracuje: bool = False
     log_wlaczony: bool = True
     licznik_zadan: int = 0
     sesja_zadan: int = 0
@@ -61,16 +60,15 @@ class Stan:
     licznik_polecen: int = 0
     polecenia: dict = field(default_factory=dict)                 # id -> Polecenie (ostatnie MAX_POLECEN)
     opozn_domyslne: float = 1.0                                   # domyślna przerwa Slaves między zadaniami
-    rozgloszenia: deque = field(default_factory=lambda: deque(maxlen=MAX_POLECEN))
-    ostatnie_rozgl_id: int = 0
     nowi: list = field(default_factory=list)                      # rejestracje od ostatniego raportu
     odrzucone: Counter = field(default_factory=Counter)           # powód -> ile pakietów
     log_sekunda: int = 0
     log_licznik: int = 0
     log_pominiete: int = 0
-    token_panelu: str = ""                        # chroni sterowanie z panelu
-    jednorazowe: dict = field(default_factory=dict)  # token -> (wygasa_ts, etykieta)
-    kody_startowe: dict = field(default_factory=dict)  # kod -> {token, master, https, port, nazwa, wygasa}
+    ssh: Optional[object] = None                                  # StanSSH (ustawiane w main.py po wczytaj_hosty)
+    # Transfer plików: staging per polecenie_id. Czyszczony po konsumpcji.
+    pliki_do_slave: dict = field(default_factory=dict)    # pol_id -> {bytes, zdalna, sha256, slave_id}
+    pliki_od_slave: dict = field(default_factory=dict)    # pol_id -> {buf: bytearray, final: bool, event, slave_id}
 
 
 def log(stan, tekst, zawsze=False):
