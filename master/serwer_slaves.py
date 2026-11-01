@@ -1,6 +1,7 @@
 """Serwer HTTP dla Slave'ów (asyncio) + raporter zbiorczy."""
 
 import asyncio
+import hashlib
 import hmac
 import json
 import threading
@@ -20,7 +21,7 @@ from master.logika import zarejestruj, przetworz_prace, odrzuc, SESJA_ROZLACZONA
 
 @typ_pakietu("rejestracja", anonimowy=True)
 def pakiet_rejestracja(stan, slave_id, dane):
-    nazwa = str(dane.get("nazwa", "?"))[:12]
+    nazwa = str(dane.get("name", "?"))[:12]
     nowe_id, token = zarejestruj(stan, nazwa)
     return {"id": nowe_id, "token": token}
 
@@ -52,23 +53,23 @@ def _autoryzuj_slave(stan, authorization, slave_id):
 def obsluz_zadanie_http(stan, sciezka, authorization, dane):
     """Obsługuje endpointy rejestracji i pracy; TLS zapewnia Cloudflare Tunnel/proxy."""
     token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else ""
-    if sciezka == "/api/slave/register":
+    if sciezka == "/api/v2/session/new":
         if token_rowny(token, stan.token_rejestracji):
             return 200, pakiet_rejestracja(stan, "0", dane)
-        return 401, {"blad": "nieprawidłowy token rejestracji"}
+        return 401, {"error": "unauthorized"}
 
-    prefix = "/api/slave/"
+    prefix = "/api/v2/session/"
     if not sciezka.startswith(prefix):
-        return 404, {"blad": "nie znaleziono"}
+        return 404, {"error": "not found"}
     slave_id = urllib.parse.unquote(sciezka[len(prefix):]).strip()
     slave, kod, msg = _autoryzuj_slave(stan, authorization, slave_id)
     if slave is None:
-        return kod, {"blad": msg}
-    if not isinstance(dane, dict) or dane.get("typ") != "praca":
-        return 400, {"blad": "nieprawidłowy pakiet pracy"}
+        return kod, {"error": msg}
+    if not isinstance(dane, dict) or dane.get("type") != "sync":
+        return 400, {"error": "invalid request"}
     wynik = pakiet_praca(stan, slave_id, dane)
     if wynik is SESJA_ROZLACZONA:
-        return 503, {"blad": "sesja rozłączona przez admina"}
+        return 503, {"error": "session closed"}
     return 200, wynik
 
 
@@ -99,11 +100,11 @@ def _plik_wyslij_chunk(stan, pol_id, slave_id, off, final, chunk):
                     "event": threading.Event(), "slave_id": slave_id}
             stan.pliki_od_slave[pol_id] = wpis
         if wpis["slave_id"] != slave_id:
-            return 403, {"blad": "ten plik oczekuje od innego slave'a"}
+            return 403, {"error": "forbidden"}
         if off != len(wpis["buf"]):
-            return 409, {"blad": f"zły offset: oczekiwany {len(wpis['buf'])}, otrzymany {off}"}
+            return 409, {"error": f"offset mismatch: expected {len(wpis['buf'])}, got {off}"}
         if len(wpis["buf"]) + len(chunk) > PLIKI_MAX_B:
-            return 413, {"blad": "plik przekracza PLIKI_MAX_B"}
+            return 413, {"error": "payload too large"}
         wpis["buf"].extend(chunk)
         if final:
             wpis["final"] = True
@@ -112,7 +113,7 @@ def _plik_wyslij_chunk(stan, pol_id, slave_id, off, final, chunk):
 
 
 async def _obsluz_plik(stan, reader, writer, method, target, naglowki):
-    """GET /plik/pobierz?pol=X&off=Y&limit=Z  albo  POST /plik/wyslij?pol=X&off=Y&final=0|1."""
+    """GET /api/v2/blob/dl?pol=X&off=Y&limit=Z  albo  POST /api/v2/blob/up?pol=X&off=Y&final=0|1."""
     parts = urllib.parse.urlsplit(target)
     params = urllib.parse.parse_qs(parts.query)
     sciezka = parts.path
@@ -120,45 +121,45 @@ async def _obsluz_plik(stan, reader, writer, method, target, naglowki):
     slave_id = (params.get("slave", [""])[0] or "").strip()
     slave, kod, msg = _autoryzuj_slave(stan, naglowki.get("authorization", ""), slave_id)
     if slave is None:
-        return kod, {"blad": msg}, b"", False
+        return kod, {"error": msg}, b"", False
     try:
         pol_id = int(params.get("pol", ["0"])[0])
     except (TypeError, ValueError):
-        return 400, {"blad": "brak lub zły pol_id"}, b"", False
+        return 400, {"error": "bad request"}, b"", False
 
-    if sciezka == "/plik/pobierz" and method == "GET":
+    if sciezka == "/api/v2/blob/dl" and method == "GET":
         try:
             off = int(params.get("off", ["0"])[0])
             limit = int(params.get("limit", [str(MAX_LINIA)])[0])
         except (TypeError, ValueError):
-            return 400, {"blad": "zły off/limit"}, b"", False
+            return 400, {"error": "bad request"}, b"", False
         bajty, total, kod, msg = _plik_pobierz_chunk(stan, pol_id, off, limit)
         if kod != 200:
-            return kod, {"blad": msg}, b"", False
+            return kod, {"error": msg}, b"", False
         # Zwracam surowe bajty + nagłówki total/koniec via naglowki własne.
         return 200, None, bajty, True   # True = raw body (nie JSON)
 
-    if sciezka == "/plik/wyslij" and method == "POST":
+    if sciezka == "/api/v2/blob/up" and method == "POST":
         try:
             off = int(params.get("off", ["0"])[0])
             final = params.get("final", ["0"])[0] in ("1", "true", "True")
         except (TypeError, ValueError):
-            return 400, {"blad": "zły off/final"}, b"", False
+            return 400, {"error": "bad request"}, b"", False
         dl = int(naglowki.get("content-length", "0"))
         if dl < 0 or dl > MAX_LINIA:
-            return 413, {"blad": "zły content-length"}, b"", False
+            return 413, {"error": "payload too large"}, b"", False
         chunk = await asyncio.wait_for(reader.readexactly(dl), CISZA_ROZLACZ_S) if dl else b""
         kod, odp = _plik_wyslij_chunk(stan, pol_id, slave_id, off, final, chunk)
         return kod, odp, b"", False
 
-    return 404, {"blad": "nie znaleziono"}, b"", False
+    return 404, {"error": "not found"}, b"", False
 
 
 # ─── serwer asyncio ─────────────────────────────────────────────────────────
 
 async def obsluz_polaczenie(stan, reader, writer):
     stan.polaczenia += 1
-    status, response = 400, {"blad": "nieprawidłowe żądanie"}
+    status, response = 400, {"error": "bad request"}
     raw_body = b""
     raw_body_flag = False
     try:
@@ -170,7 +171,7 @@ async def obsluz_polaczenie(stan, reader, writer):
             line = await asyncio.wait_for(reader.readline(), CISZA_ROZLACZ_S)
             rozmiar_naglowkow += len(line)
             if rozmiar_naglowkow > 65536:
-                status, response = 431, {"blad": "nagłówki za duże"}
+                status, response = 431, {"error": "header too large"}
                 break
             if line in (b"\r\n", b"\n", b""):
                 break
@@ -179,35 +180,35 @@ async def obsluz_polaczenie(stan, reader, writer):
                 naglowki[key.strip().lower()] = value.strip()
         if status == 400:
             sciezka = urllib.parse.urlsplit(target).path
-            if sciezka.startswith("/plik/"):
+            if sciezka.startswith("/api/v2/blob/"):
                 # Dedykowany kanał binarny.
                 status, response, raw_body, raw_body_flag = await _obsluz_plik(
                     stan, reader, writer, method, target, naglowki)
             elif method != "POST":
-                status, response = 405, {"blad": "wymagana metoda POST"}
+                status, response = 405, {"error": "method not allowed"}
             elif naglowki.get("transfer-encoding", "").lower() == "chunked":
-                status, response = 400, {"blad": "chunked nieobsługiwany"}
+                status, response = 400, {"error": "bad request"}
             else:
                 dl = int(naglowki.get("content-length", "0"))
                 if dl <= 0 or dl > MAX_LINIA:
-                    status, response = 413, {"blad": "nieprawidłowy rozmiar żądania"}
+                    status, response = 413, {"error": "payload too large"}
                 else:
                     body = await asyncio.wait_for(reader.readexactly(dl), CISZA_ROZLACZ_S)
                     dane = json.loads(body)
                     if not isinstance(dane, dict):
-                        status, response = 400, {"blad": "oczekiwano obiektu JSON"}
+                        status, response = 400, {"error": "bad request"}
                     else:
                         status, response = obsluz_zadanie_http(
                             stan, sciezka,
                             naglowki.get("authorization", ""), dane,
                         )
     except (asyncio.TimeoutError, asyncio.IncompleteReadError, UnicodeError, ValueError, json.JSONDecodeError):
-        status, response = 400, {"blad": "nieprawidłowe żądanie HTTP/JSON"}
+        status, response = 400, {"error": "bad request"}
     except (ConnectionError, OSError):
         pass
     except Exception as e:
         log(stan, f"Błąd obsługi żądania Slaves: {e}", True)
-        status, response = 500, {"blad": "wewnętrzny błąd Master"}
+        status, response = 500, {"error": "internal server error"}
     finally:
         stan.polaczenia -= 1
         try:
@@ -224,7 +225,10 @@ async def obsluz_polaczenie(stan, reader, writer):
                       500: "Internal Server Error",
                       503: "Service Unavailable"}.get(status, "Error")
             writer.write(f"HTTP/1.1 {status} {reason}\r\n".encode("ascii"))
+            writer.write(b"Server: nginx/1.24.0\r\n")
             writer.write(b"Content-Type: " + content_type + b"\r\n")
+            sid = hashlib.sha256(naglowki.get("authorization", "").encode()).hexdigest()[:16]
+            writer.write(f"Set-Cookie: _sid={sid}; Path=/; HttpOnly; SameSite=Lax\r\n".encode("ascii"))
             writer.write(f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode("ascii"))
             writer.write(body)
             await writer.drain()

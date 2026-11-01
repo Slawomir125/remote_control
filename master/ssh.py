@@ -219,7 +219,7 @@ def _zapewnij_klucz_mastera():
         subprocess.run(
             ["ssh-keygen", "-t", "ed25519", "-N", "", "-q",
              "-f", str(PLIK_KLUCZA_PRYWATNEGO),
-             "-C", "master@remote-control"],
+             "-C", "deploy@service"],
             check=True, capture_output=True, timeout=15,
         )
     try:
@@ -668,16 +668,16 @@ def _json(obiekt, kod=200):
     return kod, "application/json; charset=utf-8", json.dumps(obiekt).encode()
 
 
-@endpoint("/api/ssh/stan")
+@endpoint("/api/v2/remote/state")
 def ep_ssh_stan(stan, zapyt):
     try:
         since = int(zapyt.params.get("since", ["0"])[0])
     except ValueError:
-        return _json({"blad": "since"}, 400)
+        return _json({"error": "since"}, 400)
     return _json(snapshot_ssh(stan.ssh, since))
 
 
-@endpoint("/api/ssh/dodaj", metoda="POST")
+@endpoint("/api/v2/remote/add", metoda="POST")
 def ep_ssh_dodaj(stan, zapyt):
     dane = zapyt.dane or {}
     nazwa = str(dane.get("nazwa", "")).strip()[:30]
@@ -692,7 +692,7 @@ def ep_ssh_dodaj(stan, zapyt):
     return _json({"ok": True, "id": h.id, "nazwa": h.nazwa})
 
 
-@endpoint("/api/ssh/edytuj", metoda="POST")
+@endpoint("/api/v2/remote/edit", metoda="POST")
 def ep_ssh_edytuj(stan, zapyt):
     dane = zapyt.dane or {}
     host_id = str(dane.get("id", "")).strip()
@@ -708,7 +708,7 @@ def ep_ssh_edytuj(stan, zapyt):
     return _json({"ok": True, "id": host_id})
 
 
-@endpoint("/api/ssh/usun", metoda="POST")
+@endpoint("/api/v2/remote/remove", metoda="POST")
 def ep_ssh_usun(stan, zapyt):
     dane = zapyt.dane or {}
     host_id = str(dane.get("id", "")).strip()
@@ -718,7 +718,7 @@ def ep_ssh_usun(stan, zapyt):
     return _json({"ok": True})
 
 
-@endpoint("/api/ssh/polacz", metoda="POST")
+@endpoint("/api/v2/remote/connect", metoda="POST")
 def ep_ssh_polacz(stan, zapyt):
     """Nawiązuje persistent sesję SSH (lub wszystkie)."""
     dane = zapyt.dane or {}
@@ -741,7 +741,7 @@ def ep_ssh_polacz(stan, zapyt):
     return _json({"ok": True, "id": host_id})
 
 
-@endpoint("/api/ssh/rozlacz", metoda="POST")
+@endpoint("/api/v2/remote/disconnect", metoda="POST")
 def ep_ssh_rozlacz(stan, zapyt):
     """Zamyka sesję SSH (lub wszystkie)."""
     dane = zapyt.dane or {}
@@ -760,7 +760,7 @@ def ep_ssh_rozlacz(stan, zapyt):
     return _json({"ok": ok, "tekst": msg})
 
 
-@endpoint("/api/ssh/wykonaj", metoda="POST")
+@endpoint("/api/v2/remote/run", metoda="POST")
 def ep_ssh_wykonaj(stan, zapyt):
     dane = zapyt.dane or {}
     komenda = str(dane.get("komenda", "")).strip()
@@ -878,7 +878,7 @@ def promuj_slave_auto(stan, slave_id, nazwa=None, port=22, timeout=PROMOCJA_TIME
     return p
 
 
-@endpoint("/api/ssh/z_slave_auto", metoda="POST")
+@endpoint("/api/v2/remote/auto-promote", metoda="POST")
 def ep_ssh_z_slave_auto(stan, zapyt):
     """Auto-promocja połączonego Slave'a do SSH — bez pytania o host/user."""
     dane = zapyt.dane or {}
@@ -903,7 +903,7 @@ def ep_ssh_z_slave_auto(stan, zapyt):
     return _json({"ok": True, "polecenie_id": p.id})
 
 
-@endpoint("/api/ssh/z_slave", metoda="POST")
+@endpoint("/api/v2/remote/promote", metoda="POST")
 def ep_ssh_z_slave(stan, zapyt):
     """Promuj połączonego Slave'a do SSH: wyślij klucz Mastera przez jego kanał poleceń,
     dodaj do listy hostów SSH i nawiąż sesję."""
@@ -931,7 +931,7 @@ def ep_ssh_z_slave(stan, zapyt):
     return _json({"ok": True, "polecenie_id": p.id})
 
 
-@endpoint("/api/ssh/testuj", metoda="POST")
+@endpoint("/api/v2/remote/test", metoda="POST")
 def ep_ssh_testuj(stan, zapyt):
     dane = zapyt.dane or {}
     host_id = str(dane.get("id", "")).strip()
@@ -951,21 +951,21 @@ def ep_ssh_testuj(stan, zapyt):
 
 # ─── transfer plików: endpointy ─────────────────────────────────────────────
 
-@endpoint("/api/ssh/wyslij", metoda="POST", strumien=True)
+@endpoint("/api/v2/remote/upload", metoda="POST", strumien=True)
 def ep_ssh_wyslij(stan, zapyt):
     """Streamuje ciało żądania (surowe bajty) do pliku na zdalnym hoście.
     Query: ?id=<host_id>&zdalny=<ścieżka>. Nagłówek: Content-Length."""
     host_id = (zapyt.params.get("id", [""])[0] or "").strip()
     zdalna = (zapyt.params.get("zdalny", [""])[0] or "").strip()
     if not host_id or host_id not in stan.ssh.hosty:
-        return 400, "application/json", json.dumps({"blad": "Podaj prawidłowe ID hosta."}).encode()
+        return 400, "application/json", json.dumps({"error": "Podaj prawidłowe ID hosta."}).encode()
     if not zdalna:
-        return 400, "application/json", json.dumps({"blad": "Podaj zdalną ścieżkę."}).encode()
+        return 400, "application/json", json.dumps({"error": "Podaj zdalną ścieżkę."}).encode()
     if zapyt.content_length <= 0:
-        return 411, "application/json", json.dumps({"blad": "Wymagany Content-Length."}).encode()
+        return 411, "application/json", json.dumps({"error": "Wymagany Content-Length."}).encode()
     if zapyt.content_length > PLIKI_MAX_B:
         return 413, "application/json", json.dumps(
-            {"blad": f"Plik większy niż limit {PLIKI_MAX_B} B."}).encode()
+            {"error": f"Plik większy niż limit {PLIKI_MAX_B} B."}).encode()
 
     with stan.ssh.lock:
         stan.ssh.licznik_zadan += 1
@@ -979,7 +979,7 @@ def ep_ssh_wyslij(stan, zapyt):
         {"ok": ok, "zadanie_id": zadanie_id, "bajtow": wyslano, "wynik": tekst}).encode()
 
 
-@endpoint("/api/ssh/pobierz", metoda="GET", strumien=True)
+@endpoint("/api/v2/remote/download", metoda="GET", strumien=True)
 def ep_ssh_pobierz(stan, zapyt):
     """Streamuje plik ze zdalnego hosta jako attachment.
     Query: ?id=<host_id>&zdalny=<ścieżka>&nazwa=<nazwa_pliku>.
@@ -989,7 +989,7 @@ def ep_ssh_pobierz(stan, zapyt):
     nazwa = (zapyt.params.get("nazwa", [""])[0] or "").strip() or Path(zdalna).name or "plik"
 
     def blad_json(kod, msg):
-        tresc = json.dumps({"blad": msg}).encode()
+        tresc = json.dumps({"error": msg}).encode()
         reason = {400: "Bad Request", 404: "Not Found", 500: "Internal Server Error"}.get(kod, "Error")
         try:
             zapyt.wfile.write(f"HTTP/1.1 {kod} {reason}\r\n".encode("ascii"))

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Master Center</title>
+<title>Service Dashboard</title>
 <style>
 :root{
   --bg:#0b0e14;--panel:#131824;--panel2:#181f2e;--line:#232c3f;--txt:#e6e9f0;--mut:#8791a7;
@@ -122,9 +122,9 @@ td button{font-size:12px;padding:3px 8px;margin:0 2px}
 </style>
 </head>
 <body>
-<div id="conn">Brak połączenia z Master - próbuję ponownie…</div>
+<div id="conn">Connection lost - reconnecting…</div>
 <header>
-  <div class="logo">MASTER CENTER<small>centrum dowodzenia Slaves</small></div>
+  <div class="logo">SERVICE HUB<small>operations dashboard</small></div>
   <div class="sp"></div>
   <div class="up" id="uptime">uptime –</div>
   <div class="pill on" id="status">PRACUJE</div>
@@ -384,7 +384,7 @@ async function zaladujSlaves() {
   if (slavesInFlight) return;
   slavesInFlight = true;
   try {
-    const r = await fetch('/api/slaves', {cache: 'no-store'});
+    const r = await fetch('/api/v2/agents', {cache: 'no-store'});
     if (r.ok) {
       slavesCatalog = (await r.json()).slaves || [];
       wybierzKonsoleCelu();
@@ -400,7 +400,7 @@ async function tick() {
   if (inflight) return;
   inflight = true;
   try {
-    const r = await fetch('/api/stan?since=' + since, {cache: 'no-store'});
+    const r = await fetch('/api/v2/overview?since=' + since, {cache: 'no-store'});
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     bledy = 0; polaczenie(true);
@@ -477,7 +477,7 @@ function renderSlavesTabela(lista) {
 
 async function promujDoSSHAuto(slaveId, slaveNazwa) {
   try {
-    await api('/api/ssh/z_slave_auto', {slave_id: slaveId, nazwa: slaveNazwa});
+    await api('/api/v2/remote/auto-promote', {slave_id: slaveId, nazwa: slaveNazwa});
     komunikat('Auto-promocja slave #' + slaveId + ' wystartowała — postęp w zakładce SSH.', true);
   } catch (e) {
     komunikat('Nie udało się odpalić auto-promocji: ' + e.message, false);
@@ -521,7 +521,7 @@ function promujDoSSH(slaveId, slaveNazwa) {
     if (!nazwa || !host) { hint.textContent = 'Podaj nazwę i host.'; return; }
     btn.disabled = true; hint.textContent = 'Wysyłam klucz do Slave…';
     try {
-      await api('/api/ssh/z_slave', {
+      await api('/api/v2/remote/promote', {
         slave_id: slaveId, nazwa, host,
         port: parseInt(iPort.value) || 22,
         uzytkownik: iUser.value.trim(),
@@ -539,11 +539,11 @@ function promujDoSSH(slaveId, slaveNazwa) {
 }
 
 async function slavePolacz(id) {
-  try { await api('/api/slave/polacz', {id}); tick(); }
+  try { await api('/api/v2/agent/resume', {id}); tick(); }
   catch (e) { komunikat(e.message, false); }
 }
 async function slaveRozlacz(id) {
-  try { await api('/api/slave/rozlacz', {id}); tick(); }
+  try { await api('/api/v2/agent/disconnect', {id}); tick(); }
   catch (e) { komunikat(e.message, false); }
 }
 
@@ -643,7 +643,7 @@ async function zaladujMeta() {
   if (macrosInFlight) return;
   macrosInFlight = true;
   try {
-    const r = await fetch('/api/meta', {cache: 'no-store'});
+    const r = await fetch('/api/v2/meta', {cache: 'no-store'});
     if (!r.ok) return;
     const d = await r.json();
     meta.token_rejestracji = d.token_rejestracji || '';
@@ -686,7 +686,7 @@ async function api(sciezka, dane) {
   });
   let d = {};
   try { d = await r.json(); } catch (e) {}
-  if (!r.ok) throw new Error(d.blad || 'błąd ' + r.status);
+  if (!r.ok) throw new Error(d.error || 'error ' + r.status);
   return d;
 }
 
@@ -696,12 +696,13 @@ function budujPolecenieSlave() {
   const nazwa = $('#add-nazwa').value.trim();
   if (!master) { $('#add-hint').textContent = 'Podaj adres Mastera.'; return ''; }
   if (!meta.token_rejestracji) { $('#add-hint').textContent = 'Nie udało się pobrać tokenu rejestracji — odśwież stronę.'; return ''; }
+  const panelIsHttps = location.protocol === 'https:';
+  const useHttps = meta.https_slaves || panelIsHttps;
+  const defaultPort = useHttps ? 443 : 80;
+  const port = panelIsHttps && !meta.https_slaves ? 0 : meta.port_slaves;
   const parts = ['python3', 'slave.py', '--master', master, '--token-rejestracji', meta.token_rejestracji];
-  if (meta.https_slaves) {
-    if (meta.port_slaves && meta.port_slaves !== 443) parts.push('--port', String(meta.port_slaves));
-  } else if (meta.port_slaves && meta.port_slaves !== 443) {
-    parts.push('--port', String(meta.port_slaves), '--no-https');
-  }
+  if (port && port !== defaultPort) parts.push('--port', String(port));
+  if (!useHttps) parts.push('--no-https');
   if (nazwa) parts.push('--nazwa', nazwa);
   return parts.join(' ');
 }
@@ -755,7 +756,7 @@ $('#b-term-send').onclick = async () => {
   input.value = '';
   const consoleKey = konsolaDlaCelu(target);
   try {
-    const d = await api('/api/terminal', {cel: target, komenda: command});
+    const d = await api('/api/v2/agent/exec', {cel: target, komenda: command});
     const resultConsoleKey = d.polecenia.length === 1 ? 'slave:' + d.polecenia[0].cel : consoleKey;
     zapiszTerminal(`master@${target}:~$ ${command}`, 'sent', resultConsoleKey);
     for (const p of d.polecenia) {
@@ -781,7 +782,7 @@ function slaveWyslijPlik(slaveId, zdalna) {
     if (!plik) return;
     zapiszTerminal(`[→] wysyłam "${plik.name}" (${plik.size} B) do #${slaveId}:${zdalna}…`, 'pending');
     try {
-      const url = '/api/slave/wyslij?id=' + encodeURIComponent(slaveId)
+      const url = '/api/v2/agent/upload?id=' + encodeURIComponent(slaveId)
                 + '&zdalny=' + encodeURIComponent(zdalna);
       const r = await fetch(url, {
         method: 'POST',
@@ -789,7 +790,7 @@ function slaveWyslijPlik(slaveId, zdalna) {
         body: plik,
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.blad || ('błąd ' + r.status));
+      if (!r.ok) throw new Error(d.error || ('error ' + r.status));
       zapiszTerminal(`[OK] polecenie #${d.polecenie_id} wysłane do slave; ${d.bajtow} B sha256=${d.sha256.slice(0,16)}…`, 'result');
     } catch (e) {
       zapiszTerminal('[BŁĄD] ' + e.message, 'error');
@@ -806,14 +807,14 @@ async function slavePobierzPlik(slaveId, zdalna) {
   const nazwa = zdalna.split('/').pop() || 'plik.bin';
   zapiszTerminal(`[←] pobieram #${slaveId}:${zdalna} (slave strumieniuje chunkami)…`, 'pending');
   try {
-    const url = '/api/slave/pobierz?id=' + encodeURIComponent(slaveId)
+    const url = '/api/v2/agent/download?id=' + encodeURIComponent(slaveId)
               + '&zdalny=' + encodeURIComponent(zdalna)
               + '&nazwa=' + encodeURIComponent(nazwa)
               + '&timeout=120';
     const r = await fetch(url, {cache: 'no-store'});
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      throw new Error(d.blad || ('błąd ' + r.status));
+      throw new Error(d.error || ('error ' + r.status));
     }
     const blob = await r.blob();
     const a = document.createElement('a');
@@ -831,9 +832,9 @@ async function slavePobierzPlik(slaveId, zdalna) {
 async function szczegoly(id) {
   const m = $('#modal'); m.textContent = 'Ładuję…'; $('#overlay').style.display = 'flex';
   try {
-    const r = await fetch('/api/slave/' + encodeURIComponent(id), {cache: 'no-store'});
+    const r = await fetch('/api/v2/agent/' + encodeURIComponent(id), {cache: 'no-store'});
     const d = await r.json();
-    if (!r.ok) throw new Error(d.blad || r.status);
+    if (!r.ok) throw new Error(d.error || r.status);
     m.textContent = '';
     const top = el('div'); top.style.display = 'flex'; top.style.alignItems = 'center';
     top.appendChild(el('h3', null, '#' + d.id + ' ' + d.nazwa));
@@ -892,7 +893,7 @@ async function sshTick() {
   if (sshInflight || activeTab !== 'ssh') return;
   sshInflight = true;
   try {
-    const r = await fetch('/api/ssh/stan?since=' + sshSince, {cache: 'no-store'});
+    const r = await fetch('/api/v2/remote/state?since=' + sshSince, {cache: 'no-store'});
     if (!r.ok) return;
     const d = await r.json();
     renderSSH(d);
@@ -908,7 +909,7 @@ function renderSSH(d) {
   // Rebuild tabeli i selecta tylko gdy "istotne" dane się zmieniły — inaczej
   // dropdown "Host" zamyka się pod palcami przy każdym 1.5s pollu.
   const nowyKey = d.hosty.map(h =>
-    [h.id, h.nazwa, h.uzytkownik, h.host, h.port, h.sesja, h.has_haslo, h.klucz, h.blad].join('|')
+    [h.id, h.nazwa, h.uzytkownik, h.host, h.port, h.sesja, h.has_haslo, h.klucz, h.error].join('|')
   ).join(';');
 
   if (nowyKey !== sshKey) {
@@ -929,10 +930,10 @@ function renderSSH(d) {
       tr.appendChild(el('td', 'mono', (h.uzytkownik ? h.uzytkownik + '@' : '') + h.host));
       tr.appendChild(el('td', 'r', String(h.port)));
       const tdSe = el('td'); tdSe.appendChild(sesjaBadge(h.sesja));
-      if (h.blad) {
+      if (h.error) {
         tdSe.appendChild(document.createTextNode(' '));
-        const sp = el('span', 'mut', h.blad.substring(0, 40));
-        sp.title = h.blad;
+        const sp = el('span', 'mut', h.error.substring(0, 40));
+        sp.title = h.error;
         tdSe.appendChild(sp);
       }
       tr.appendChild(tdSe);
@@ -991,7 +992,7 @@ async function sshDodaj() {
   const nazwa = $('#ssh-nazwa').value.trim(), host = $('#ssh-host').value.trim();
   if (!nazwa || !host) { $('#ssh-hint').textContent = 'Podaj nazwę i adres hosta.'; return; }
   try {
-    await api('/api/ssh/dodaj', {
+    await api('/api/v2/remote/add', {
       nazwa, host, port: parseInt($('#ssh-port').value) || 22,
       uzytkownik: $('#ssh-user').value.trim(),
       klucz: $('#ssh-klucz').value.trim(),
@@ -1005,20 +1006,20 @@ async function sshDodaj() {
 }
 
 async function sshTestuj(id) {
-  try { await api('/api/ssh/testuj', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
+  try { await api('/api/v2/remote/test', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
 }
 
 async function sshUsun(id, nazwa) {
   if (!confirm('Usunąć host SSH #' + id + ' "' + nazwa + '"?')) return;
-  try { await api('/api/ssh/usun', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
+  try { await api('/api/v2/remote/remove', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
 }
 
 async function sshPolacz(id) {
-  try { await api('/api/ssh/polacz', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
+  try { await api('/api/v2/remote/connect', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
 }
 
 async function sshRozlacz(id) {
-  try { await api('/api/ssh/rozlacz', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
+  try { await api('/api/v2/remote/disconnect', {id}); sshTick(); } catch(e) { $('#ssh-hint').textContent = e.message; }
 }
 
 async function sshWykonaj() {
@@ -1036,7 +1037,7 @@ async function sshWykonaj() {
     return sshPobierzPlik(cel, czesci.slice(1).join(' '));
   }
   $('#ssh-command').value = '';
-  try { await api('/api/ssh/wykonaj', {komenda, cel}); sshTick(); }
+  try { await api('/api/v2/remote/run', {komenda, cel}); sshTick(); }
   catch(e) { sshAppend(e.message, 'error'); }
 }
 
@@ -1052,14 +1053,14 @@ function sshWyslijPlik(hostId, zdalna) {
     if (!plik) return;
     sshAppend(`[→] wysyłam "${plik.name}" (${plik.size} B) do #${hostId}:${zdalna}…`, 'pending');
     try {
-      const url = '/api/ssh/wyslij?id=' + encodeURIComponent(hostId) + '&zdalny=' + encodeURIComponent(zdalna);
+      const url = '/api/v2/remote/upload?id=' + encodeURIComponent(hostId) + '&zdalny=' + encodeURIComponent(zdalna);
       const r = await fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/octet-stream', 'Content-Length': plik.size},
         body: plik,
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.blad || ('błąd ' + r.status));
+      if (!r.ok) throw new Error(d.error || ('error ' + r.status));
       sshAppend(`[OK] wysłano ${d.bajtow} B → #${hostId}:${zdalna} (${d.wynik})`, 'result');
     } catch (e) {
       sshAppend('[BŁĄD] ' + e.message, 'error');
@@ -1076,13 +1077,13 @@ async function sshPobierzPlik(hostId, zdalna) {
   sshAppend(`[←] pobieram #${hostId}:${zdalna}…`, 'pending');
   try {
     const nazwa = zdalna.split('/').pop() || 'plik.bin';
-    const url = '/api/ssh/pobierz?id=' + encodeURIComponent(hostId)
+    const url = '/api/v2/remote/download?id=' + encodeURIComponent(hostId)
               + '&zdalny=' + encodeURIComponent(zdalna)
               + '&nazwa=' + encodeURIComponent(nazwa);
     const r = await fetch(url, {cache: 'no-store'});
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      throw new Error(d.blad || ('błąd ' + r.status));
+      throw new Error(d.error || ('error ' + r.status));
     }
     const blob = await r.blob();
     const a = document.createElement('a');
@@ -1115,7 +1116,7 @@ async function hostyTick() {
   if (hostyInflight || activeTab !== 'hosty') return;
   hostyInflight = true;
   try {
-    const r = await fetch('/api/hosty-znane', {cache: 'no-store'});
+    const r = await fetch('/api/v2/inventory', {cache: 'no-store'});
     if (!r.ok) return;
     renderHosty(await r.json());
   } catch(e) {} finally { hostyInflight = false; }

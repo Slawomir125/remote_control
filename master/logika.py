@@ -155,7 +155,7 @@ def zbierz_polecenia(stan, slave, teraz):
         return []
     slave.polecenia = [p for p in slave.polecenia if teraz - p.ts <= POLECENIE_TTL_S]
     wyslij = sorted(slave.polecenia, key=lambda p: p.id)
-    return [{"id": p.id, "polecenie": p.nazwa, "args": p.args}
+    return [{"id": p.id, "cmd": p.nazwa, "args": p.args}
             for p in wyslij[:20]]
 
 
@@ -173,7 +173,7 @@ def przyjmij_potwierdzenia(stan, slave_id, slave, potwierdzenia):
         if not any(x is pol for x in slave.polecenia):
             continue
         slave.polecenia = [x for x in slave.polecenia if x is not pol]
-        ok, wynik = bool(p.get("ok")), str(p.get("wynik", ""))
+        ok, wynik = bool(p.get("ok")), str(p.get("output", ""))
         if pol.nazwa != "makro":
             wynik = wynik[:1000]
         pol.wykonane += 1
@@ -206,16 +206,16 @@ def przetworz_prace(stan, slave_id, dane):
         if slave.sesja != "połączony":
             slave.sesja = "połączony"
         slave.ostatnio = teraz
-        slave.pauza = bool(dane.get("pauza"))
-        przyjmij_potwierdzenia(stan, slave_id, slave, dane.get("potwierdzenia"))
+        slave.pauza = bool(dane.get("idle"))
+        przyjmij_potwierdzenia(stan, slave_id, slave, dane.get("acks"))
         werdykt, szczegoly = ocen_odpowiedz(slave.zadanie, dane, teraz)
-        if werdykt in ("ok", "zle"):
+        if werdykt in ("ok", "fail"):
             linia_logu = zapisz_wynik(stan, slave_id, slave, szczegoly, teraz)
-        odpowiedz = {"poprzednie": werdykt}
-        odpowiedz["przerwa_domyslna"] = stan.opozn_domyslne
+        odpowiedz = {"prev": werdykt}
+        odpowiedz["interval"] = stan.opozn_domyslne
         polecenia = zbierz_polecenia(stan, slave, teraz)
         if polecenia:
-            odpowiedz["polecenia"] = polecenia
+            odpowiedz["tasks"] = polecenia
     if linia_logu:
         log_zadania(stan, linia_logu)                # poza blokadą
     return odpowiedz

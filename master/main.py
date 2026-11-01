@@ -11,7 +11,7 @@ from master.serwer_slaves import uruchom_serwer_slaves, podnies_limit_plikow, ra
 from master.panel import SerwerPanelu, Panel
 from master.konsola import konsola  # import rejestruje @komenda
 from master.ssh import wczytaj_hosty  # import rejestruje @endpoint SSH
-from master import hosty  # noqa: F401  — import rejestruje @endpoint /api/hosty-znane
+from master import hosty  # noqa: F401  — import rejestruje @endpoint /api/v2/inventory
 
 
 def uruchom_w_tle(serwer, stan):

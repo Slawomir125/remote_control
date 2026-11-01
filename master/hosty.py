@@ -41,7 +41,7 @@ def _widok_ssh(host, teraz):
     }
 
 
-@endpoint("/api/hosty-znane")
+@endpoint("/api/v2/inventory")
 def ep_hosty_znane(stan, zapyt):
     teraz = time.time()
     with stan.lock:
